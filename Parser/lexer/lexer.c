@@ -13,14 +13,16 @@
               (c >= 'a' && c <= 'z')\
                || (c >= 'A' && c <= 'Z')\
                || c == '_'\
-               || (c >= 128))
+               || (c >= 128)\
+               || (c >= 'а' && c <= 'я'))
 
 #define is_potential_identifier_char(c) (\
               (c >= 'a' && c <= 'z')\
                || (c >= 'A' && c <= 'Z')\
                || (c >= '0' && c <= '9')\
                || c == '_'\
-               || (c >= 128))
+               || (c >= 128)\
+               || (c >= 'а' && c <= 'я'))
 
 #ifdef Py_DEBUG
 static inline tokenizer_mode* TOK_GET_MODE(struct tok_state* tok) {

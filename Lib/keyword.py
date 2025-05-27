@@ -48,13 +48,16 @@ kwlist = [
     'raise',
     'return',
     'try',
+    'up',
     'while',
     'with',
-    'yield'
+    'yield',
+    'вернуть',
+    'поднять',
+    'пропустить'
 ]
 
 softkwlist = [
-    '_',
     'case',
     'match',
     'type'

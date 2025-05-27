@@ -189,7 +189,8 @@ class CCallMakerVisitor(GrammarVisitor):
 
     def visit_StringLeaf(self, node: StringLeaf) -> FunctionCall:
         val = ast.literal_eval(node.value)
-        if re.match(r"[a-zA-Z_]\w*\Z", val):  # This is a keyword
+        if re.match(r"[а-яa-zA-Z_]\w*\Z", val):
+            print(val) # This is a keyword
             if node.value.endswith("'"):
                 return self.keyword_helper(val)
             else:
