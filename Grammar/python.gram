@@ -8,6 +8,7 @@ _PyPegen_parse(Parser *p)
     p->keywords = reserved_keywords;
     p->n_keyword_lists = n_keyword_lists;
     p->soft_keywords = soft_keywords;
+    p->soft_keyword_aliases = soft_keyword_aliases;
 
     // Run parser
     void *result = NULL;
@@ -24,6 +25,58 @@ _PyPegen_parse(Parser *p)
     return result;
 }
 '''
+
+@keyword_aliases '''{
+    # Russian aliases of the keywords and soft keywords, as 'keyword': 'alias'
+    # (a tuple of aliases can be given as well).
+    #
+    # An alias of a keyword is a keyword too: it gets the token type of the
+    # original keyword, so it can be used wherever the original one can, and
+    # it can't be used as a name.  An alias of a soft keyword is a soft keyword
+    # accepted wherever the original one is.  The original keywords keep
+    # working, and code using the aliases is parsed to the same AST.
+    #
+    # After changing this table run 'make regen-pegen regen-keyword'.
+    'False': 'Ложь',
+    'None': 'Ничто',
+    'True': 'Истина',
+    'and': 'и',
+    'as': 'как',
+    'assert': 'утверждать',
+    'async': 'асинхронно',
+    'await': 'ожидать',
+    'break': 'прервать',
+    'class': 'класс',
+    'continue': 'продолжить',
+    'def': 'функция',
+    'del': 'удалить',
+    'elif': 'иначеесли',
+    'else': 'иначе',
+    'except': 'исключение',
+    'finally': 'наконец',
+    'for': 'для',
+    'from': 'из',
+    'global': 'глобально',
+    'if': 'если',
+    'import': 'импорт',
+    'in': 'в',
+    'is': 'есть',
+    'lambda': 'лямбда',
+    'nonlocal': 'нелокально',
+    'not': 'не',
+    'or': 'или',
+    'pass': 'пропустить',
+    'raise': 'поднять',
+    'return': 'вернуть',
+    'try': 'попробовать',
+    'while': 'пока',
+    'with': 'используя',
+    'yield': 'выдать',
+    # Soft keywords
+    'case': 'случай',
+    'match': 'сопоставить',
+    'type': 'тип',
+}'''
 
 # ========================= START OF THE GRAMMAR =========================
 
@@ -94,10 +147,12 @@ func_type[mod_ty]: '(' a=[type_expressions] ')' '->' b=expression NEWLINE* ENDMA
 # GENERAL STATEMENTS
 # ==================
 
-statements[asdl_stmt_seq*]: a=statement+ { _PyPegen_register_stmts(p, (asdl_stmt_seq*)_PyPegen_seq_flatten(p, a)) }
+statements[asdl_stmt_seq*]: a=statement+ { (asdl_stmt_seq*)_PyPegen_seq_flatten(p, a) }
 
 statement[asdl_stmt_seq*]:
-    | a=compound_stmt { (asdl_stmt_seq*)_PyPegen_singleton_seq(p, a) }
+    | a=compound_stmt { _PyPegen_register_stmts(p ,
+                           (asdl_stmt_seq*)_PyPegen_singleton_seq(p, a)
+                        ) }
     | a[asdl_stmt_seq*]=simple_stmts { a }
 
 single_compound_stmt[asdl_stmt_seq*]:
@@ -985,7 +1040,10 @@ tstring[expr_ty] (memo):
             _PyPegen_template_str(p, a, (asdl_expr_seq*)b, c)) }
 
 string[expr_ty]: s[Token*]=STRING { _PyPegen_constant_from_string(p, s) }
-strings[expr_ty] (memo): a[asdl_expr_seq*]=(fstring|string|tstring)+ { _PyPegen_concatenate_strings(p, a, EXTRA) }
+strings[expr_ty] (memo):
+    | invalid_string_tstring_concat
+    | a[asdl_expr_seq*]=(fstring|string)+ { _PyPegen_concatenate_strings(p, a, EXTRA) }
+    | a[asdl_expr_seq*]=tstring+ { _PyPegen_concatenate_tstrings(p, a, EXTRA) }
 
 list[expr_ty]:
     | '[' a=[star_named_expressions] ']' { _PyAST_List(a, Load, EXTRA) }
@@ -1382,11 +1440,11 @@ invalid_import:
     | 'import' token=NEWLINE {
         RAISE_SYNTAX_ERROR_STARTING_FROM(token, "Expected one or more names after 'import'") }
 invalid_dotted_as_name:
-    | dotted_name 'as' !(NAME (',' | ')' | NEWLINE)) a=expression {
+    | dotted_name 'as' !(NAME (',' | ')' | ';' | NEWLINE)) a=expression {
         RAISE_SYNTAX_ERROR_KNOWN_LOCATION(a,
             "cannot use %s as import target", _PyPegen_get_expr_name(a)) }
 invalid_import_from_as_name:
-    | NAME 'as' !(NAME (',' | ')' | NEWLINE)) a=expression {
+    | NAME 'as' !(NAME (',' | ')' | ';' | NEWLINE)) a=expression {
         RAISE_SYNTAX_ERROR_KNOWN_LOCATION(a,
             "cannot use %s as import target", _PyPegen_get_expr_name(a)) }
 
@@ -1418,7 +1476,7 @@ invalid_except_stmt:
         RAISE_SYNTAX_ERROR_STARTING_FROM(a, "multiple exception types must be parenthesized when using 'as'") }
     | a='except' expression ['as' NAME ] NEWLINE { RAISE_SYNTAX_ERROR("expected ':'") }
     | a='except' NEWLINE { RAISE_SYNTAX_ERROR("expected ':'") }
-    | 'except' expression 'as' a=expression {
+    | 'except' expression 'as' a=expression ':' block {
         RAISE_SYNTAX_ERROR_KNOWN_LOCATION(
             a, "cannot use except statement with %s", _PyPegen_get_expr_name(a)) }
 invalid_except_star_stmt:
@@ -1426,7 +1484,7 @@ invalid_except_star_stmt:
         RAISE_SYNTAX_ERROR_STARTING_FROM(a, "multiple exception types must be parenthesized when using 'as'") }
     | a='except' '*' expression ['as' NAME ] NEWLINE { RAISE_SYNTAX_ERROR("expected ':'") }
     | a='except' '*' (NEWLINE | ':') { RAISE_SYNTAX_ERROR("expected one or more exception types") }
-    | 'except' '*' expression 'as' a=expression {
+    | 'except' '*' expression 'as' a=expression ':' block {
         RAISE_SYNTAX_ERROR_KNOWN_LOCATION(
             a, "cannot use except* statement with %s", _PyPegen_get_expr_name(a)) }
 invalid_finally_stmt:
@@ -1545,6 +1603,12 @@ invalid_tstring_replacement_field:
 invalid_tstring_conversion_character:
     | '!' &(':' | '}') { RAISE_SYNTAX_ERROR_ON_NEXT_TOKEN("t-string: missing conversion character") }
     | '!' !NAME { RAISE_SYNTAX_ERROR_ON_NEXT_TOKEN("t-string: invalid conversion character") }
+
+invalid_string_tstring_concat:
+    | a=(fstring|string)+ b[expr_ty]=tstring {
+        RAISE_SYNTAX_ERROR_KNOWN_RANGE(PyPegen_last_item(a, expr_ty), b, "cannot mix t-string literals with string or bytes literals") }
+    | a=tstring+ b[expr_ty]=(fstring|string) {
+        RAISE_SYNTAX_ERROR_KNOWN_RANGE(PyPegen_last_item(a, expr_ty), b, "cannot mix t-string literals with string or bytes literals") }
 
 invalid_arithmetic:
     | sum ('+'|'-'|'*'|'/'|'%'|'//'|'@') a='not' b=inversion { RAISE_SYNTAX_ERROR_KNOWN_RANGE(a, b, "'not' after an operator must be parenthesized") }

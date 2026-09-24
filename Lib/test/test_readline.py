@@ -1,6 +1,7 @@
 """
 Very minimal unittests for parts of the readline module.
 """
+import codecs
 import locale
 import os
 import sys
@@ -170,6 +171,44 @@ class TestHistoryManipulation (unittest.TestCase):
         # Readline seems to report an additional history element.
         self.assertIn(readline.get_current_history_length(), (2, 3))
 
+    def test_write_read_zero_length_history(self):
+        previous_length = readline.get_history_length()
+        self.addCleanup(readline.set_history_length, previous_length)
+
+        readline.clear_history()
+        readline.add_history("first line")
+        readline.set_history_length(0)
+        readline.write_history_file(TESTFN)
+        self.addCleanup(os.remove, TESTFN)
+
+        readline.clear_history()
+        # libedit cannot read an empty history file, only one that still
+        # has its header line.  How many items remain is not checked:
+        # libedit's own history_truncate_file() ignores a length of 0.
+        readline.read_history_file(TESTFN)
+
+    @unittest.skipUnless(hasattr(readline, "append_history_file"),
+                         "append_history not available")
+    def test_append_limited_history(self):
+        previous_length = readline.get_history_length()
+        self.addCleanup(readline.set_history_length, previous_length)
+
+        readline.clear_history()
+        readline.add_history("first line")
+        readline.add_history("second line")
+        readline.write_history_file(TESTFN)
+        self.addCleanup(os.remove, TESTFN)
+
+        readline.add_history("third line")
+        readline.set_history_length(2)
+        readline.append_history_file(1, TESTFN)
+
+        readline.clear_history()
+        readline.read_history_file(TESTFN)
+        self.assertEqual(readline.get_history_item(1), "second line")
+        self.assertEqual(readline.get_history_item(2), "third line")
+        self.assertEqual(readline.get_history_item(3), None)
+
 
 class TestReadline(unittest.TestCase):
 
@@ -231,6 +270,13 @@ print("History length:", readline.get_current_history_length())
             # writing and reading non-ASCII bytes into/from a TTY works, but
             # readline or ncurses ignores non-ASCII bytes on read.
             self.skipTest(f"the LC_CTYPE locale is {loc!r}")
+        if sys.flags.utf8_mode:
+            encoding = locale.getencoding()
+            encoding = codecs.lookup(encoding).name  # normalize the name
+            if encoding != "utf-8":
+                # gh-133711: The Python UTF-8 Mode ignores the LC_CTYPE locale
+                # and always use the UTF-8 encoding.
+                self.skipTest(f"the LC_CTYPE encoding is {encoding!r}")
 
         try:
             readline.add_history("\xEB\xEF")

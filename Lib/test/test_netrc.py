@@ -1,10 +1,6 @@
 import netrc, os, unittest, sys, textwrap
+from test import support
 from test.support import os_helper
-
-try:
-    import pwd
-except ImportError:
-    pwd = None
 
 temp_filename = os_helper.TESTFN
 
@@ -63,6 +59,9 @@ class NetrcTestCase(unittest.TestCase):
             "machine host.domain.com login",
             "machine host.domain.com account",
             "machine host.domain.com password",
+            "machine host.domain.com login \"\"",
+            "machine host.domain.com account \"\"",
+            "machine host.domain.com password \"\"",
             "machine host.domain.com login \"\" account",
             "machine host.domain.com login \"\" password",
             "machine host.domain.com account \"\" password"
@@ -75,6 +74,9 @@ class NetrcTestCase(unittest.TestCase):
             "default login",
             "default account",
             "default password",
+            "default login \"\"",
+            "default account \"\"",
+            "default password \"\"",
             "default login \"\" account",
             "default login \"\" password",
             "default account \"\" password"
@@ -82,6 +84,15 @@ class NetrcTestCase(unittest.TestCase):
         for item in data:
             nrc = self.make_nrc(item)
             self.assertEqual(nrc.hosts['default'], ('', '', ''))
+
+    def test_empty_quoted_token_is_not_eof(self):
+        data = (
+            '"" invalid',
+            'machine host.domain.com "" invalid',
+        )
+        for item in data:
+            with self.subTest(item=item):
+                self.assertRaises(netrc.NetrcParseError, self.make_nrc, item)
 
     def test_invalid_tokens(self):
         data = (
@@ -269,9 +280,14 @@ class NetrcTestCase(unittest.TestCase):
             machine bar.domain.com login foo password pass
             """, '#pass')
 
+    @unittest.skipUnless(support.is_wasi, 'WASI only test')
+    def test_security_on_WASI(self):
+        self.assertFalse(netrc._can_security_check())
+        self.assertEqual(netrc._getpwuid(0), 'uid 0')
+        self.assertEqual(netrc._getpwuid(123456), 'uid 123456')
 
     @unittest.skipUnless(os.name == 'posix', 'POSIX only test')
-    @unittest.skipIf(pwd is None, 'security check requires pwd module')
+    @unittest.skipUnless(hasattr(os, 'getuid'), "os.getuid is required")
     @os_helper.skip_unless_working_chmod
     def test_security(self):
         # This test is incomplete since we are normally not run as root and

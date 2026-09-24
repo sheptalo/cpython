@@ -80,7 +80,7 @@ Key ideas
   using memoization.
 - If parsing fails completely (no rule succeeds in parsing all the input text), the
   PEG parser doesn't have a concept of "where the
-  [`SyntaxError`](https://docs.python.org/3/library/exceptions.html#SyntaxError) is".
+  [`SyntaxError`](https://docs.python.org/3/builtins/exceptions.html#SyntaxError) is".
 
 
 > [!IMPORTANT]
@@ -645,6 +645,40 @@ as well as soft keywords:
 > section for some background on this). In general, try to define them in places
 > where there are not many alternatives.
 
+Keyword aliases
+---------------
+
+The `@keyword_aliases` meta directive gives *aliases* to keywords and soft
+keywords. Its value is a dict literal that maps a keyword used in the grammar
+to an alias (or to a tuple of aliases). `Grammar/python.gram` uses it to give
+every keyword a Russian alias:
+
+```
+@keyword_aliases '''{
+    'return': 'вернуть',
+    'match': 'сопоставить',
+    ...
+}'''
+```
+
+The grammar rules only mention the original keywords:
+
+* An alias of a hard keyword is a hard keyword with the *same token type* as
+  the original one. It is added to the `reserved_keywords` table of the
+  generated parser, so the parser cannot tell `вернуть` from `return`.
+* An alias of a soft keyword is added to the `soft_keywords` array and to the
+  `soft_keyword_aliases` table, which `_PyPegen_expect_soft_keyword()` checks
+  when the token is not the soft keyword itself.
+
+Keywords are looked up by the length of the token in bytes, so the
+`reserved_keywords` table groups the keywords by their length in UTF-8, and
+non-ASCII strings are written as octal escapes to keep the generated parser
+ASCII-only.
+
+The aliases are available as `keyword.kwaliases` (and are included in
+`keyword.kwlist` or `keyword.softkwlist`). After changing them, run
+`make regen-pegen regen-keyword`.
+
 Error handling
 --------------
 
@@ -654,7 +688,7 @@ is, and it will unwind the stack and report the exception. This means that if a
 [rule action](#grammar-actions) raises an exception, all parsing will
 stop at that exact point. This is done to allow to correctly propagate any
 exception set by calling Python's C API functions. This also includes
-[`SyntaxError`](https://docs.python.org/3/library/exceptions.html#SyntaxError)
+[`SyntaxError`](https://docs.python.org/3/builtins/exceptions.html#SyntaxError)
 exceptions and it is the main mechanism the parser uses to report custom syntax
 error messages.
 
@@ -715,7 +749,7 @@ acts in two phases:
 > When defining invalid rules:
 >
 > - Make sure all custom invalid rules raise
->   [`SyntaxError`](https://docs.python.org/3/library/exceptions.html#SyntaxError)
+>   [`SyntaxError`](https://docs.python.org/3/builtins/exceptions.html#SyntaxError)
 >   exceptions (or a subclass of it).
 > - Make sure **all** invalid rules start with the `invalid_` prefix to not
 >   impact performance of parsing correct Python code.
@@ -818,6 +852,13 @@ directory on the CPython repository and manually call the parser generator by ex
 ```shell
 $ python -m pegen python <PATH TO YOUR GRAMMAR FILE>
 ```
+
+> [!CAUTION]
+> Python's grammar (the `Grammar/python.gram` file) is written for the
+> C backend. To experiment, you will need to write a grammar
+> without C-specific parts like actions and the trailer.
+> See [#133560](https://github.com/python/cpython/issues/133560)
+> and [#96424](https://github.com/python/cpython/issues/96424) for more information.
 
 This will generate a file called `parse.py` in the same directory that you
 can use to parse some input:

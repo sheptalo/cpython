@@ -1,12 +1,12 @@
 import builtins
 import codecs
-import _datetime
 import gc
 import io
 import locale
 import operator
 import os
 import random
+import shutil
 import socket
 import struct
 import subprocess
@@ -24,7 +24,7 @@ from test.support import import_helper
 from test.support import force_not_colorized
 from test.support import SHORT_TIMEOUT
 try:
-    from test.support import interpreters
+    from concurrent import interpreters
 except ImportError:
     interpreters = None
 import textwrap
@@ -57,7 +57,7 @@ class DisplayHookTest(unittest.TestCase):
             dh(None)
 
         self.assertEqual(out.getvalue(), "")
-        self.assertTrue(not hasattr(builtins, "_"))
+        self.assertNotHasAttr(builtins, "_")
 
         # sys.displayhook() requires arguments
         self.assertRaises(TypeError, dh)
@@ -172,7 +172,7 @@ class ExceptHookTest(unittest.TestCase):
             with support.captured_stderr() as err:
                 sys.__excepthook__(*sys.exc_info())
 
-        self.assertTrue(err.getvalue().endswith("ValueError: 42\n"))
+        self.assertEndsWith(err.getvalue(), "ValueError: 42\n")
 
         self.assertRaises(TypeError, sys.__excepthook__)
 
@@ -192,7 +192,7 @@ class ExceptHookTest(unittest.TestCase):
         err = err.getvalue()
         self.assertIn("""  File "b'bytes_filename'", line 123\n""", err)
         self.assertIn("""    text\n""", err)
-        self.assertTrue(err.endswith("SyntaxError: msg\n"))
+        self.assertEndsWith(err, "SyntaxError: msg\n")
 
     def test_excepthook(self):
         with test.support.captured_output("stderr") as stderr:
@@ -269,8 +269,7 @@ class SysModuleTest(unittest.TestCase):
             rc, out, err = assert_python_failure('-c', code, **env_vars)
             self.assertEqual(rc, 1)
             self.assertEqual(out, b'')
-            self.assertTrue(err.startswith(expected),
-                "%s doesn't start with %s" % (ascii(err), ascii(expected)))
+            self.assertStartsWith(err, expected)
 
         # test that stderr buffer is flushed before the exit message is written
         # into stderr
@@ -437,7 +436,7 @@ class SysModuleTest(unittest.TestCase):
     @unittest.skipUnless(hasattr(sys, "setdlopenflags"),
                          'test needs sys.setdlopenflags()')
     def test_dlopenflags(self):
-        self.assertTrue(hasattr(sys, "getdlopenflags"))
+        self.assertHasAttr(sys, "getdlopenflags")
         self.assertRaises(TypeError, sys.getdlopenflags, 42)
         oldflags = sys.getdlopenflags()
         self.assertRaises(TypeError, sys.setdlopenflags)
@@ -623,8 +622,7 @@ class SysModuleTest(unittest.TestCase):
             # And the next record must be for g456().
             filename, lineno, funcname, sourceline = stack[i+1]
             self.assertEqual(funcname, "g456")
-            self.assertTrue((sourceline.startswith("if leave_g.wait(") or
-                             sourceline.startswith("g_raised.set()")))
+            self.assertStartsWith(sourceline, ("if leave_g.wait(", "g_raised.set()"))
         finally:
             # Reap the spawned thread.
             leave_g.set()
@@ -860,7 +858,7 @@ class SysModuleTest(unittest.TestCase):
                  "hash_randomization", "isolated", "dev_mode", "utf8_mode",
                  "warn_default_encoding", "safe_path", "int_max_str_digits")
         for attr in attrs:
-            self.assertTrue(hasattr(sys.flags, attr), attr)
+            self.assertHasAttr(sys.flags, attr)
             attr_type = bool if attr in ("dev_mode", "safe_path") else int
             self.assertEqual(type(getattr(sys.flags, attr)), attr_type, attr)
         self.assertTrue(repr(sys.flags))
@@ -871,12 +869,7 @@ class SysModuleTest(unittest.TestCase):
     def assert_raise_on_new_sys_type(self, sys_attr):
         # Users are intentionally prevented from creating new instances of
         # sys.flags, sys.version_info, and sys.getwindowsversion.
-        arg = sys_attr
-        attr_type = type(sys_attr)
-        with self.assertRaises(TypeError):
-            attr_type(arg)
-        with self.assertRaises(TypeError):
-            attr_type.__new__(attr_type, arg)
+        support.check_disallow_instantiation(self, type(sys_attr), sys_attr)
 
     def test_sys_flags_no_instantiation(self):
         self.assert_raise_on_new_sys_type(sys.flags)
@@ -1072,10 +1065,11 @@ class SysModuleTest(unittest.TestCase):
 
         levels = {'alpha': 0xA, 'beta': 0xB, 'candidate': 0xC, 'final': 0xF}
 
-        self.assertTrue(hasattr(sys.implementation, 'name'))
-        self.assertTrue(hasattr(sys.implementation, 'version'))
-        self.assertTrue(hasattr(sys.implementation, 'hexversion'))
-        self.assertTrue(hasattr(sys.implementation, 'cache_tag'))
+        self.assertHasAttr(sys.implementation, 'name')
+        self.assertHasAttr(sys.implementation, 'version')
+        self.assertHasAttr(sys.implementation, 'hexversion')
+        self.assertHasAttr(sys.implementation, 'cache_tag')
+        self.assertHasAttr(sys.implementation, 'supports_isolated_interpreters')
 
         version = sys.implementation.version
         self.assertEqual(version[:2], (version.major, version.minor))
@@ -1088,6 +1082,15 @@ class SysModuleTest(unittest.TestCase):
         # PEP 421 requires that .name be lower case.
         self.assertEqual(sys.implementation.name,
                          sys.implementation.name.lower())
+
+        # https://peps.python.org/pep-0734
+        sii = sys.implementation.supports_isolated_interpreters
+        self.assertIsInstance(sii, bool)
+        if test.support.check_impl_detail(cpython=True):
+            if test.support.is_emscripten or test.support.is_wasi:
+                self.assertFalse(sii)
+            else:
+                self.assertTrue(sii)
 
     @test.support.cpython_only
     def test_debugmallocstats(self):
@@ -1137,23 +1140,12 @@ class SysModuleTest(unittest.TestCase):
         b = sys.getallocatedblocks()
         self.assertLessEqual(b, a)
         try:
-            # While we could imagine a Python session where the number of
-            # multiple buffer objects would exceed the sharing of references,
-            # it is unlikely to happen in a normal test run.
-            #
-            # In free-threaded builds each code object owns an array of
-            # pointers to copies of the bytecode. When the number of
-            # code objects is a large fraction of the total number of
-            # references, this can cause the total number of allocated
-            # blocks to exceed the total number of references.
-            #
-            # For some reason, iOS seems to trigger the "unlikely to happen"
-            # case reliably under CI conditions. It's not clear why; but as
-            # this test is checking the behavior of getallocatedblock()
-            # under garbage collection, we can skip this pre-condition check
-            # for now. See GH-130384.
-            if not support.Py_GIL_DISABLED and not support.is_apple_mobile:
-                self.assertLess(a, sys.gettotalrefcount())
+            # The reported blocks will include immortalized strings, but the
+            # total ref count will not. This will sanity check that among all
+            # other objects (those eligible for garbage collection) there
+            # are more references being tracked than allocated blocks.
+            interned_immortal = sys.getunicodeinternedsize(_only_immortal=True)
+            self.assertLess(a - interned_immortal, sys.gettotalrefcount())
         except AttributeError:
             # gettotalrefcount() not available
             pass
@@ -1345,6 +1337,57 @@ class SysModuleTest(unittest.TestCase):
     def test_disable_gil_abi(self):
         self.assertEqual('t' in sys.abiflags, support.Py_GIL_DISABLED)
 
+    def test_int_max_str_digits(self):
+        old_limit = sys.get_int_max_str_digits()
+        self.assertIsInstance(old_limit, int)
+        self.assertGreaterEqual(old_limit, 0)
+        self.addCleanup(sys.set_int_max_str_digits, old_limit)
+
+        sys.set_int_max_str_digits(0)
+        self.assertEqual(sys.get_int_max_str_digits(), 0)
+
+        sys.set_int_max_str_digits(2_048)
+        self.assertEqual(sys.get_int_max_str_digits(), 2_048)
+
+        with self.assertRaises(ValueError):
+            # the minimum is 640 digits
+            sys.set_int_max_str_digits(5)
+        with self.assertRaises(ValueError):
+            sys.set_int_max_str_digits(-2)
+        with self.assertRaises(TypeError):
+            sys.set_int_max_str_digits(2_048.0)
+
+    @test.support.cpython_only
+    def test_is_immortal(self):
+        is_immortal = sys._is_immortal
+
+        # Singletons
+        self.assertTrue(is_immortal(None))
+        self.assertTrue(is_immortal(False))
+        self.assertTrue(is_immortal(True))
+        self.assertTrue(is_immortal(0))
+        self.assertTrue(is_immortal(b''))
+        self.assertTrue(is_immortal(''))
+        self.assertTrue(is_immortal(b'x'))
+        self.assertTrue(is_immortal('x'))
+        self.assertTrue(is_immortal(()))
+
+        # Static types
+        self.assertTrue(is_immortal(int))
+        self.assertTrue(is_immortal(dict))
+
+        # Test some mortal objects
+        class PythonType:
+            pass
+        self.assertFalse(is_immortal([1, 2, 3]))
+        self.assertFalse(is_immortal({'key': 5}))
+        self.assertFalse(is_immortal(object()))
+        self.assertFalse(is_immortal(PythonType))
+        self.assertFalse(is_immortal(2 ** 100))
+        # Use encode/decode to get a fresh object
+        self.assertFalse(is_immortal(b'abc'.decode()))
+        self.assertFalse(is_immortal('abc'.encode()))
+
 
 @test.support.cpython_only
 class UnraisableHookTest(unittest.TestCase):
@@ -1419,7 +1462,7 @@ class UnraisableHookTest(unittest.TestCase):
                 else:
                     self.assertIn("ValueError", report)
                     self.assertIn("del is broken", report)
-                self.assertTrue(report.endswith("\n"))
+                self.assertEndsWith(report, "\n")
 
     def test_original_unraisablehook_exception_qualname(self):
         # See bpo-41031, bpo-45083.
@@ -1488,6 +1531,7 @@ class UnraisableHookTest(unittest.TestCase):
     def test_custom_unraisablehook_fail(self):
         _testcapi = import_helper.import_module('_testcapi')
         from _testcapi import err_writeunraisable
+
         def hook_func(*args):
             raise Exception("hook_func failed")
 
@@ -1736,7 +1780,12 @@ class SizeofTest(unittest.TestCase):
             x = property(getx, setx, delx, "")
             check(x, size('5Pi'))
         # PyCapsule
-        check(_datetime.datetime_CAPI, size('6P'))
+        try:
+            import _datetime
+        except ModuleNotFoundError:
+            pass
+        else:
+            check(_datetime.datetime_CAPI, size('6P'))
         # rangeiterator
         check(iter(range(1)), size('3l'))
         check(iter(range(2**65)), size('3P'))
@@ -1955,29 +2004,15 @@ class SizeofTest(unittest.TestCase):
         self.assertEqual(out, b"")
         self.assertEqual(err, b"")
 
-
-def _supports_remote_attaching():
-    PROCESS_VM_READV_SUPPORTED = False
-
-    try:
-        from _remote_debugging import PROCESS_VM_READV_SUPPORTED
-    except ImportError:
-        pass
-
-    return PROCESS_VM_READV_SUPPORTED
-
-@unittest.skipIf(not sys.is_remote_debug_enabled(), "Remote debugging is not enabled")
-@unittest.skipIf(sys.platform != "darwin" and sys.platform != "linux" and sys.platform != "win32",
-                    "Test only runs on Linux, Windows and MacOS")
-@unittest.skipIf(sys.platform == "linux" and not _supports_remote_attaching(),
-                    "Test only runs on Linux with process_vm_readv support")
+@test.support.support_remote_exec_only
 @test.support.cpython_only
 class TestRemoteExec(unittest.TestCase):
     def tearDown(self):
         test.support.reap_children()
 
     def _run_remote_exec_test(self, script_code, python_args=None, env=None,
-                              prologue='',
+                              python_executable=None, prologue='',
+                              after_ready=None,
                               script_path=os_helper.TESTFN + '_remote.py'):
         # Create the script that will be remotely executed
         self.addCleanup(os_helper.unlink, script_path)
@@ -2025,7 +2060,10 @@ sock.close()
 ''')
 
         # Start the target process and capture its output
-        cmd = [sys.executable]
+        if python_executable is None:
+            python_executable = sys.executable
+
+        cmd = [python_executable]
         if python_args:
             cmd.extend(python_args)
         cmd.append(target)
@@ -2050,6 +2088,9 @@ sock.close()
                 response = client_socket.recv(1024)
                 self.assertEqual(response, b"ready")
 
+                if after_ready is not None:
+                    after_ready(proc)
+
                 # Try remote exec on the target process
                 sys.remote_exec(proc.pid, script_path)
 
@@ -2071,6 +2112,19 @@ sock.close()
                 proc.kill()
                 proc.terminate()
                 proc.wait(timeout=SHORT_TIMEOUT)
+
+    def _run_remote_exec_with_deleted_mapping(self, deleted_path, **kwargs):
+        def delete_loaded_mapping(proc):
+            os_helper.unlink(deleted_path)
+            with open(f'/proc/{proc.pid}/maps', encoding='utf-8') as maps:
+                self.assertIn(f'{deleted_path} (deleted)', maps.read())
+
+        script = 'print("Remote script executed successfully!")'
+        returncode, stdout, stderr = self._run_remote_exec_test(
+            script, after_ready=delete_loaded_mapping, **kwargs)
+        self.assertEqual(returncode, 0)
+        self.assertIn(b"Remote script executed successfully!", stdout)
+        self.assertEqual(stderr, b"")
 
     def test_remote_exec(self):
         """Test basic remote exec functionality"""
@@ -2129,7 +2183,7 @@ print("Remote script executed successfully!")
         returncode, stdout, stderr = self._run_remote_exec_test(script, prologue=prologue)
         self.assertEqual(returncode, 0)
         self.assertIn(b"Remote script executed successfully!", stdout)
-        self.assertIn(b"Audit event: remote_debugger_script, arg: ", stdout)
+        self.assertIn(b"Audit event: cpython.remote_debugger_script, arg: ", stdout)
         self.assertEqual(stderr, b"")
 
     def test_remote_exec_with_exception(self):
@@ -2197,6 +2251,74 @@ this is invalid python code
         """Test remote exec with invalid script path"""
         with self.assertRaises(OSError):
             sys.remote_exec(os.getpid(), "invalid_script_path")
+
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux-only regression test')
+    @unittest.skipUnless(
+        sysconfig.get_config_var('Py_ENABLE_SHARED') == 1,
+        'requires a shared libpython build')
+    def test_remote_exec_deleted_libpython(self):
+        """Test remote exec when the target libpython was deleted."""
+        build_dir = sysconfig.get_config_var('abs_builddir')
+        ldlibrary = sysconfig.get_config_var('LDLIBRARY')
+        instsoname = sysconfig.get_config_var('INSTSONAME')
+        if not build_dir or not ldlibrary or not instsoname:
+            self.skipTest('cannot determine shared libpython location')
+
+        source_libpython = os.path.join(build_dir, instsoname)
+        if not os.path.exists(source_libpython):
+            self.skipTest(f'{source_libpython!r} does not exist')
+
+        with os_helper.temp_dir() as lib_dir:
+            copied_libpython = os.path.join(lib_dir, instsoname)
+            shutil.copy2(source_libpython, copied_libpython)
+            if ldlibrary != instsoname:
+                os.symlink(instsoname, os.path.join(lib_dir, ldlibrary))
+
+            env = os.environ.copy()
+            ld_library_path = env.get('LD_LIBRARY_PATH')
+            env['LD_LIBRARY_PATH'] = lib_dir if not ld_library_path else (
+                lib_dir + os.pathsep + ld_library_path)
+
+            self._run_remote_exec_with_deleted_mapping(copied_libpython,
+                                                       env=env)
+
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux-only regression test')
+    @unittest.skipUnless(
+        sysconfig.get_config_var('Py_ENABLE_SHARED') == 0,
+        'requires a static Python build')
+    def test_remote_exec_deleted_static_executable(self):
+        """Test remote exec when the target static executable was deleted."""
+        build_dir = sysconfig.get_config_var('abs_builddir')
+        stdlib_dir = os.path.dirname(os.path.abspath(os.__file__))
+        if not build_dir or not os.path.isdir(stdlib_dir):
+            self.skipTest('cannot determine build-tree locations')
+
+        pybuilddir_txt = os.path.join(build_dir, 'pybuilddir.txt')
+        if not os.path.exists(pybuilddir_txt):
+            self.skipTest(f'{pybuilddir_txt!r} does not exist')
+
+        with open(pybuilddir_txt, encoding='utf-8') as pybuilddir_file:
+            pybuilddir = pybuilddir_file.read().strip()
+        source_ext_dir = os.path.join(build_dir, pybuilddir)
+        if not os.path.isdir(source_ext_dir):
+            self.skipTest(f'{source_ext_dir!r} does not exist')
+
+        with os_helper.temp_dir() as copied_root:
+            copied_build_dir = os.path.join(copied_root, 'build')
+            copied_pybuilddir = os.path.join(copied_build_dir, pybuilddir)
+            os.makedirs(os.path.dirname(copied_pybuilddir))
+            os.symlink(stdlib_dir, os.path.join(copied_root, 'Lib'))
+            os.symlink(source_ext_dir, copied_pybuilddir)
+            shutil.copy2(pybuilddir_txt,
+                         os.path.join(copied_build_dir, 'pybuilddir.txt'))
+
+            copied_python = os.path.join(copied_build_dir,
+                                         os.path.basename(sys.executable))
+            shutil.copy2(sys.executable, copied_python)
+
+            self._run_remote_exec_with_deleted_mapping(
+                copied_python, python_args=['-S'],
+                python_executable=copied_python)
 
     def test_remote_exec_in_process_without_debug_fails_envvar(self):
         """Test remote exec in a process without remote debugging enabled"""

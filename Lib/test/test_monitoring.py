@@ -3,6 +3,7 @@
 import collections
 import dis
 import functools
+import inspect
 import math
 import operator
 import sys
@@ -11,10 +12,7 @@ import types
 import unittest
 
 import test.support
-from test.support import requires_specialization_ft, script_helper
-
-_testcapi = test.support.import_helper.import_module("_testcapi")
-_testinternalcapi = test.support.import_helper.import_module("_testinternalcapi")
+from test.support import import_helper, requires_specialization_ft, script_helper
 
 PAIR = (0,1)
 
@@ -881,6 +879,8 @@ class ExceptionMonitoringTest(CheckEvents):
            This test checks that both paths record an equivalent event.
            """
 
+        _testinternalcapi = import_helper.import_module("_testinternalcapi")
+
         def gen():
             yield 1
             return 2
@@ -1048,6 +1048,8 @@ class ExceptionMonitoringTest(CheckEvents):
 
     @requires_specialization_ft
     def test_no_unwind_for_shim_frame(self):
+        _testinternalcapi = import_helper.import_module("_testinternalcapi")
+
         class ValueErrorRaiser:
             def __init__(self):
                 raise ValueError()
@@ -1076,6 +1078,25 @@ class ExceptionMonitoringTest(CheckEvents):
             ('return', 'f', None),
         ]
 
+        self.assertEqual(events, expected)
+
+    # gh-140373
+    def test_gen_unwind(self):
+        def gen():
+            yield 1
+
+        def f():
+            g = gen()
+            next(g)
+            g.close()
+
+        recorders = (
+            UnwindRecorder,
+        )
+        events = self.get_events(f, TEST_TOOL, recorders)
+        expected = [
+            ("unwind", GeneratorExit, "gen"),
+        ]
         self.assertEqual(events, expected)
 
 class LineRecorder:
@@ -1709,6 +1730,27 @@ class TestBranchAndJumpEvents(CheckEvents):
             ('branch right', 'func', 6, 8),
             ('branch right', 'func', 2, 10)])
 
+    def test_callback_set_frame_lineno(self):
+        def func(s: str) -> int:
+            if s.startswith("t"):
+                return 1
+            else:
+                return 0
+
+        def callback(code, from_, to):
+            # try set frame.f_lineno
+            frame = inspect.currentframe()
+            while frame and frame.f_code is not code:
+                frame = frame.f_back
+
+            self.assertIsNotNone(frame)
+            frame.f_lineno = frame.f_lineno + 1 # run next instruction
+
+        sys.monitoring.set_local_events(TEST_TOOL, func.__code__, E.BRANCH_LEFT)
+        sys.monitoring.register_callback(TEST_TOOL, E.BRANCH_LEFT, callback)
+
+        self.assertEqual(func("true"), 1)
+
 
 class TestBranchConsistency(MonitoringTestBase, unittest.TestCase):
 
@@ -2100,6 +2142,7 @@ class TestRegressions(MonitoringTestBase, unittest.TestCase):
             sys.monitoring.set_events(TEST_TOOL, 0)
 
     def test_108390(self):
+        _testinternalcapi = import_helper.import_module("_testinternalcapi")
 
         class Foo:
             def __init__(self, set_event):
@@ -2176,6 +2219,8 @@ class TestOptimizer(MonitoringTestBase, unittest.TestCase):
 class TestTier2Optimizer(CheckEvents):
 
     def test_monitoring_already_opimized_loop(self):
+        _testinternalcapi = import_helper.import_module("_testinternalcapi")
+
         def test_func(recorder):
             set_events = sys.monitoring.set_events
             line = E.LINE
@@ -2212,18 +2257,20 @@ class TestCApiEventGeneration(MonitoringTestBase, unittest.TestCase):
 
     class Scope:
         def __init__(self, *args):
+            self._testcapi = import_helper.import_module("_testcapi")
             self.args = args
 
         def __enter__(self):
-            _testcapi.monitoring_enter_scope(*self.args)
+            self._testcapi.monitoring_enter_scope(*self.args)
 
         def __exit__(self, *args):
-            _testcapi.monitoring_exit_scope()
+            self._testcapi.monitoring_exit_scope()
 
     def setUp(self):
         super(TestCApiEventGeneration, self).setUp()
 
-        capi = _testcapi
+        self._testcapi = import_helper.import_module("_testcapi")
+        capi = self._testcapi
 
         self.codelike = capi.CodeLike(2)
 
@@ -2292,7 +2339,7 @@ class TestCApiEventGeneration(MonitoringTestBase, unittest.TestCase):
     def test_fire_event(self):
         for expected, event, function, *args in self.cases:
             offset = 0
-            self.codelike = _testcapi.CodeLike(1)
+            self.codelike = self._testcapi.CodeLike(1)
             with self.subTest(function.__name__):
                 args_ = (self.codelike, offset) + tuple(args)
                 self.check_event_count(event, function, args_, expected)
@@ -2303,7 +2350,7 @@ class TestCApiEventGeneration(MonitoringTestBase, unittest.TestCase):
                 continue
             assert args and isinstance(args[-1], BaseException)
             offset = 0
-            self.codelike = _testcapi.CodeLike(1)
+            self.codelike = self._testcapi.CodeLike(1)
             with self.subTest(function.__name__):
                 args_ = (self.codelike, offset) + tuple(args[:-1]) + (None,)
                 evt = int(math.log2(event))
@@ -2313,7 +2360,7 @@ class TestCApiEventGeneration(MonitoringTestBase, unittest.TestCase):
     def test_fire_event_failing_callback(self):
         for expected, event, function, *args in self.cases:
             offset = 0
-            self.codelike = _testcapi.CodeLike(1)
+            self.codelike = self._testcapi.CodeLike(1)
             with self.subTest(function.__name__):
                 args_ = (self.codelike, offset) + tuple(args)
                 exc = OSError(42)
@@ -2363,12 +2410,14 @@ class TestCApiEventGeneration(MonitoringTestBase, unittest.TestCase):
     def test_disable_event(self):
         for expected, event, function, *args in self.cases:
             offset = 0
-            self.codelike = _testcapi.CodeLike(2)
+            self.codelike = self._testcapi.CodeLike(2)
             with self.subTest(function.__name__):
                 args_ = (self.codelike, 0) + tuple(args)
                 self.check_disable(event, function, args_, expected)
 
     def test_enter_scope_two_events(self):
+        _testcapi = self._testcapi
+
         try:
             yield_counter = CounterWithDisable()
             unwind_counter = CounterWithDisable()

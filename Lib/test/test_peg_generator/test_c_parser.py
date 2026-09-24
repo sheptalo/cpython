@@ -1,4 +1,5 @@
 import contextlib
+import re
 import subprocess
 import sysconfig
 import textwrap
@@ -100,10 +101,16 @@ class TestCParser(unittest.TestCase):
 
         with contextlib.ExitStack() as stack:
             python_exe = stack.enter_context(support.setup_venv_with_pip_setuptools("venv"))
-            sitepackages = subprocess.check_output(
-                [python_exe, "-c", "import sysconfig; print(sysconfig.get_path('platlib'))"],
-                text=True,
-            ).strip()
+
+            def get_sysconfig_path(name):
+                # Force UTF-8 to emit the non-ASCII venv path in any locale.
+                return subprocess.check_output(
+                    [python_exe, "-X", "utf8", "-c",
+                     f"import sysconfig; print(sysconfig.get_path({name!r}))"],
+                    encoding="utf-8",
+                ).strip()
+
+            sitepackages = get_sysconfig_path("platlib")
             stack.enter_context(import_helper.DirsOnSysPath(sitepackages))
             cls.addClassCleanup(stack.pop_all().close)
 
@@ -387,10 +394,10 @@ class TestCParser(unittest.TestCase):
         test_source = """
         stmt = "with (\\n    a as b,\\n    c as d\\n): pass"
         the_ast = parse.parse_string(stmt, mode=1)
-        self.assertTrue(ast_dump(the_ast).startswith(
+        self.assertStartsWith(ast_dump(the_ast),
             "Module(body=[With(items=[withitem(context_expr=Name(id='a', ctx=Load()), optional_vars=Name(id='b', ctx=Store())), "
             "withitem(context_expr=Name(id='c', ctx=Load()), optional_vars=Name(id='d', ctx=Store()))]"
-        ))
+        )
         """
         self.run_test(grammar_source, test_source)
 
@@ -493,6 +500,46 @@ class TestCParser(unittest.TestCase):
         test_source = """
         valid_cases = ["if if + if"]
         invalid_cases = ["if if"]
+        self.check_input_strings_for_grammar(valid_cases, invalid_cases)
+        """
+        self.run_test(grammar_source, test_source)
+
+    def test_keyword_aliases_source(self) -> None:
+        grammar_source = """
+        @keyword_aliases "{'if': 'если', 'match': 'сопоставить'}"
+        start: 'if' "match" NAME NEWLINE
+        """
+        grammar = parse_string(grammar_source, GrammarParser)
+        parser_source = generate_c_parser_source(grammar)
+        # Non-ASCII strings are escaped, so the generated code is ASCII only.
+        self.assertTrue(parser_source.isascii())
+        # Keywords are looked up by their length in bytes: 'если' is 8 bytes
+        # long in UTF-8, and has the same token type as 'if'.
+        self.assertIn("static const int n_keyword_lists = 9;", parser_source)
+        keywords = parser_source.split("reserved_keywords[] = {")[1].split("};")[0]
+        groups = keywords.split("(KeywordToken[])")[1:]
+        self.assertEqual(len(groups), 9)
+        if_type = re.search(r'\{"if", (\d+)\}', groups[2]).group(1)
+        self.assertIn(
+            r'{"\320\265\321\201\320\273\320\270", %s},' % if_type, groups[8]
+        )
+        self.assertIn(
+            r'{"\321\201\320\276\320\277\320\276\321\201\321\202'
+            r'\320\260\320\262\320\270\321\202\321\214", "match"},',
+            parser_source,
+        )
+
+    def test_keyword_aliases(self) -> None:
+        grammar_source = """
+        @keyword_aliases "{'if': 'если', 'match': ('сопоставить', 'выбор')}"
+        start: ('if' | &"match" "match") NAME NEWLINE
+        """
+        test_source = """
+        valid_cases = [
+            "if x", "если x", "match x", "сопоставить x", "выбор x",
+            "match выбор", "выбор сопоставить",
+        ]
+        invalid_cases = ["если если", "if если", "match если", "x x", "если"]
         self.check_input_strings_for_grammar(valid_cases, invalid_cases)
         """
         self.run_test(grammar_source, test_source)

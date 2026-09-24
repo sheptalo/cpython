@@ -41,6 +41,22 @@ extern PyObject *_Py_set_function_type_params(
 PyAPI_FUNC(int)
 _PyFunction_VerifyStateless(PyThreadState *, PyObject *);
 
+static inline PyObject* _PyFunction_GET_BUILTINS(PyObject *func) {
+    return _PyFunction_CAST(func)->func_builtins;
+}
+#define _PyFunction_GET_BUILTINS(func) _PyFunction_GET_BUILTINS(_PyObject_CAST(func))
+
+
+/* Get the callable wrapped by a classmethod.
+   Returns a borrowed reference.
+   The caller must ensure 'cm' is a classmethod object. */
+extern PyObject *_PyClassMethod_GetFunc(PyObject *cm);
+
+/* Get the callable wrapped by a staticmethod.
+   Returns a borrowed reference.
+   The caller must ensure 'sm' is a staticmethod object. */
+extern PyObject *_PyStaticMethod_GetFunc(PyObject *sm);
+
 
 #ifdef __cplusplus
 }

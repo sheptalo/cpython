@@ -9,6 +9,7 @@
 
 #include "lexer/lexer.h"
 #include "tokenizer/tokenizer.h"
+#include "tokenizer/helpers.h"
 #include "pegen.h"
 
 // Internal parser functions
@@ -379,44 +380,34 @@ _PyPegen_is_memoized(Parser *p, int type, void *pres)
     return 0;
 }
 
-int
-_PyPegen_lookahead_with_name(int positive, expr_ty (func)(Parser *), Parser *p)
-{
-    int mark = p->mark;
-    void *res = func(p);
-    p->mark = mark;
-    return (res != NULL) == positive;
-}
+#define LOOKAHEAD1(NAME, RES_TYPE)                                  \
+    int                                                             \
+    NAME (int positive, RES_TYPE (func)(Parser *), Parser *p)       \
+    {                                                               \
+        int mark = p->mark;                                         \
+        void *res = func(p);                                        \
+        p->mark = mark;                                             \
+        return (res != NULL) == positive;                           \
+    }
 
-int
-_PyPegen_lookahead_with_string(int positive, expr_ty (func)(Parser *, const char*), Parser *p, const char* arg)
-{
-    int mark = p->mark;
-    void *res = func(p, arg);
-    p->mark = mark;
-    return (res != NULL) == positive;
-}
+LOOKAHEAD1(_PyPegen_lookahead, void *)
+LOOKAHEAD1(_PyPegen_lookahead_for_expr, expr_ty)
+LOOKAHEAD1(_PyPegen_lookahead_for_stmt, stmt_ty)
+#undef LOOKAHEAD1
 
-int
-_PyPegen_lookahead_with_int(int positive, Token *(func)(Parser *, int), Parser *p, int arg)
-{
-    int mark = p->mark;
-    void *res = func(p, arg);
-    p->mark = mark;
-    return (res != NULL) == positive;
-}
+#define LOOKAHEAD2(NAME, RES_TYPE, T)                                   \
+    int                                                                 \
+    NAME (int positive, RES_TYPE (func)(Parser *, T), Parser *p, T arg) \
+    {                                                                   \
+        int mark = p->mark;                                             \
+        void *res = func(p, arg);                                       \
+        p->mark = mark;                                                 \
+        return (res != NULL) == positive;                               \
+    }
 
-// gh-111178: Use _Py_NO_SANITIZE_UNDEFINED to disable sanitizer checks on
-// undefined behavior (UBsan) in this function, rather than changing 'func'
-// callback API.
-int _Py_NO_SANITIZE_UNDEFINED
-_PyPegen_lookahead(int positive, void *(func)(Parser *), Parser *p)
-{
-    int mark = p->mark;
-    void *res = func(p);
-    p->mark = mark;
-    return (res != NULL) == positive;
-}
+LOOKAHEAD2(_PyPegen_lookahead_with_int, Token *, int)
+LOOKAHEAD2(_PyPegen_lookahead_with_string, expr_ty, const char *)
+#undef LOOKAHEAD2
 
 Token *
 _PyPegen_expect_token(Parser *p, int type)
@@ -470,6 +461,20 @@ _PyPegen_expect_forced_token(Parser *p, int type, const char* expected) {
     return t;
 }
 
+static int
+is_soft_keyword_alias(Parser *p, const char *name, const char *keyword)
+{
+    if (p->soft_keyword_aliases == NULL) {
+        return 0;
+    }
+    for (KeywordAlias *a = p->soft_keyword_aliases; a->alias != NULL; a++) {
+        if (strcmp(a->alias, name) == 0 && strcmp(a->keyword, keyword) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 expr_ty
 _PyPegen_expect_soft_keyword(Parser *p, const char *keyword)
 {
@@ -488,7 +493,7 @@ _PyPegen_expect_soft_keyword(Parser *p, const char *keyword)
         p->error_indicator = 1;
         return NULL;
     }
-    if (strcmp(s, keyword) != 0) {
+    if (strcmp(s, keyword) != 0 && !is_soft_keyword_alias(p, s, keyword)) {
         return NULL;
     }
     return _PyPegen_name_token(p);
@@ -620,7 +625,8 @@ expr_ty _PyPegen_soft_keyword_token(Parser *p) {
     Py_ssize_t size;
     PyBytes_AsStringAndSize(t->bytes, &the_token, &size);
     for (char **keyword = p->soft_keywords; *keyword != NULL; keyword++) {
-        if (strncmp(*keyword, the_token, (size_t)size) == 0) {
+        if (strlen(*keyword) == (size_t)size &&
+            strncmp(*keyword, the_token, (size_t)size) == 0) {
             return _PyPegen_name_from_token(p, t);
         }
     }
@@ -826,6 +832,7 @@ _PyPegen_Parser_New(struct tok_state *tok, int start_rule, int flags,
     p->keywords = NULL;
     p->n_keyword_lists = -1;
     p->soft_keywords = NULL;
+    p->soft_keyword_aliases = NULL;
     p->tokens = PyMem_Malloc(sizeof(Token *));
     if (!p->tokens) {
         PyMem_Free(p);
@@ -957,6 +964,11 @@ _PyPegen_run_parser(Parser *p)
 {
     void *res = _PyPegen_parse(p);
     assert(p->level == 0);
+    if (res != NULL && PyErr_Occurred()) {
+        // Discard a result returned with an exception still pending
+        // (e.g. a MemoryError from a recovered-from allocation failure).
+        return NULL;
+    }
     if (res == NULL) {
         if ((p->flags & PyPARSE_ALLOW_INCOMPLETE_INPUT) &&  _is_end_of_source(p)) {
             PyErr_Clear();
@@ -1011,8 +1023,11 @@ _PyPegen_run_parser_from_file_pointer(FILE *fp, int start_rule, PyObject *filena
     struct tok_state *tok = _PyTokenizer_FromFile(fp, enc, ps1, ps2);
     if (tok == NULL) {
         if (PyErr_Occurred()) {
-            _PyPegen_raise_tokenizer_init_error(filename_ob);
-            return NULL;
+            _PyTokenizer_raise_init_error(filename_ob);
+        }
+        else {
+            // The only silent tokenizer init failure is a failed allocation.
+            PyErr_NoMemory();
         }
         return NULL;
     }
@@ -1064,7 +1079,11 @@ _PyPegen_run_parser_from_string(const char *str, int start_rule, PyObject *filen
     }
     if (tok == NULL) {
         if (PyErr_Occurred()) {
-            _PyPegen_raise_tokenizer_init_error(filename_ob);
+            _PyTokenizer_raise_init_error(filename_ob);
+        }
+        else {
+            // The only silent tokenizer init failure is a failed allocation.
+            PyErr_NoMemory();
         }
         return NULL;
     }

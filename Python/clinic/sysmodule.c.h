@@ -1396,7 +1396,8 @@ PyDoc_STRVAR(sys__stats_dump__doc__,
 "\n"
 "Dump stats to file, and clears the stats.\n"
 "\n"
-"Return False if no statistics were not dumped because stats gathering was off.");
+"Return False if no statistics were not dumped because stats gathering\n"
+"was off.");
 
 #define SYS__STATS_DUMP_METHODDEF    \
     {"_stats_dump", (PyCFunction)sys__stats_dump, METH_NOARGS, sys__stats_dump__doc__},
@@ -1544,16 +1545,16 @@ PyDoc_STRVAR(sys_remote_exec__doc__,
 "Executes a file containing Python code in a given remote Python process.\n"
 "\n"
 "This function returns immediately, and the code will be executed by the\n"
-"target process\'s main thread at the next available opportunity, similarly\n"
-"to how signals are handled. There is no interface to determine when the\n"
-"code has been executed. The caller is responsible for making sure that\n"
-"the file still exists whenever the remote process tries to read it and that\n"
-"it hasn\'t been overwritten.\n"
+"target process\'s main thread at the next available opportunity,\n"
+"similarly to how signals are handled.  There is no interface to\n"
+"determine when the code has been executed.  The caller is responsible\n"
+"for making sure that the file still exists whenever the remote process\n"
+"tries to read it and that it hasn\'t been overwritten.\n"
 "\n"
-"The remote process must be running a CPython interpreter of the same major\n"
-"and minor version as the local process. If either the local or remote\n"
-"interpreter is pre-release (alpha, beta, or release candidate) then the\n"
-"local and remote interpreters must be the same exact version.\n"
+"The remote process must be running a CPython interpreter of the same\n"
+"major and minor version as the local process.  If either the local or\n"
+"remote interpreter is pre-release (alpha, beta, or release candidate)\n"
+"then the local and remote interpreters must be the same exact version.\n"
 "\n"
 "Args:\n"
 "     pid (int): The process ID of the target Python process.\n"
@@ -1793,6 +1794,37 @@ sys__baserepl(PyObject *module, PyObject *Py_UNUSED(ignored))
     return sys__baserepl_impl(module);
 }
 
+PyDoc_STRVAR(sys__clear_type_descriptors__doc__,
+"_clear_type_descriptors($module, type, /)\n"
+"--\n"
+"\n"
+"Private function for clearing certain descriptors from a type\'s dictionary.\n"
+"\n"
+"See gh-135228 for context.");
+
+#define SYS__CLEAR_TYPE_DESCRIPTORS_METHODDEF    \
+    {"_clear_type_descriptors", (PyCFunction)sys__clear_type_descriptors, METH_O, sys__clear_type_descriptors__doc__},
+
+static PyObject *
+sys__clear_type_descriptors_impl(PyObject *module, PyObject *type);
+
+static PyObject *
+sys__clear_type_descriptors(PyObject *module, PyObject *arg)
+{
+    PyObject *return_value = NULL;
+    PyObject *type;
+
+    if (!PyObject_TypeCheck(arg, &PyType_Type)) {
+        _PyArg_BadArgument("_clear_type_descriptors", "argument", (&PyType_Type)->tp_name, arg);
+        goto exit;
+    }
+    type = arg;
+    return_value = sys__clear_type_descriptors_impl(module, type);
+
+exit:
+    return return_value;
+}
+
 PyDoc_STRVAR(sys__is_gil_enabled__doc__,
 "_is_gil_enabled($module, /)\n"
 "--\n"
@@ -1948,4 +1980,4 @@ exit:
 #ifndef SYS_GETANDROIDAPILEVEL_METHODDEF
     #define SYS_GETANDROIDAPILEVEL_METHODDEF
 #endif /* !defined(SYS_GETANDROIDAPILEVEL_METHODDEF) */
-/*[clinic end generated code: output=449d16326e69dcf6 input=a9049054013a1b77]*/
+/*[clinic end generated code: output=407915aef6734c56 input=a9049054013a1b77]*/

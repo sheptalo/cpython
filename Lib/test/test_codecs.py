@@ -1,8 +1,10 @@
 import codecs
 import contextlib
 import copy
+import importlib
 import io
 import pickle
+import os
 import sys
 import unittest
 import encodings
@@ -1620,6 +1622,15 @@ class IDNACodecTest(unittest.TestCase):
         self.assertEqual("pyth\xf6n.org".encode("idna"), b"xn--pythn-mua.org")
         self.assertEqual("pyth\xf6n.org.".encode("idna"), b"xn--pythn-mua.org.")
 
+    @support.subTests(['unicode', 'encoded'], [
+        ('\N{CHEROKEE LETTER A}\N{CHEROKEE LETTER A}', b"xn--58da"),
+        ('\N{GEORGIAN CAPITAL LETTER AN}.', b"xn--7md."),
+        ('\N{CYRILLIC LETTER PALOCHKA}.example', b"xn--d5a.example"),
+        ('\N{ROMAN NUMERAL REVERSED ONE HUNDRED}.example.', b"xn--q5g.example."),
+    ])
+    def test_new_unicode_case_folding(self, unicode, encoded):
+        self.assertEqual(unicode.encode("idna"), encoded)
+
     def test_builtin_encode_invalid(self):
         for case, expected in self.invalid_encode_testcases:
             with self.subTest(case=case, expected=expected):
@@ -3107,6 +3118,13 @@ class TransformCodecTest(unittest.TestCase):
                     info = codecs.lookup(alias)
                     self.assertEqual(info.name, expected_name)
 
+    def test_alias_modules_exist(self):
+        encodings_dir = os.path.dirname(encodings.__file__)
+        for value in encodings.aliases.aliases.values():
+            codec_mod = f"encodings.{value}"
+            self.assertIsNotNone(importlib.util.find_spec(codec_mod),
+                                 f"Codec module not found: {codec_mod}")
+
     def test_quopri_stateless(self):
         # Should encode with quotetabs=True
         encoded = codecs.encode(b"space tab\teol \n", "quopri-codec")
@@ -3284,7 +3302,7 @@ class CodePageTest(unittest.TestCase):
             codecs.code_page_encode, 932, '\xff')
         self.assertRaisesRegex(UnicodeDecodeError, 'cp932',
             codecs.code_page_decode, 932, b'\x81\x00', 'strict', True)
-        self.assertRaisesRegex(UnicodeDecodeError, 'CP_UTF8',
+        self.assertRaisesRegex(UnicodeDecodeError, 'cp65001',
             codecs.code_page_decode, self.CP_UTF8, b'\xff', 'strict', True)
 
     def check_decode(self, cp, tests):
@@ -3794,7 +3812,7 @@ class LocaleCodecTest(unittest.TestCase):
                     with self.assertRaises(RuntimeError) as cm:
                         self.decode(encoded, errors)
                     errmsg = str(cm.exception)
-                    self.assertTrue(errmsg.startswith("decode error: "), errmsg)
+                    self.assertStartsWith(errmsg, "decode error: ")
                 else:
                     decoded = self.decode(encoded, errors)
                     self.assertEqual(decoded, expected)
@@ -3896,6 +3914,17 @@ class CodecNameNormalizationTest(unittest.TestCase):
         self.assertEqual(normalize('UTF 8'), 'UTF_8')
         self.assertEqual(normalize('utf.8'), 'utf.8')
         self.assertEqual(normalize('utf...8'), 'utf...8')
+
+
+class CodecCacheTest(unittest.TestCase):
+    def test_cache_bounded(self):
+        for i in range(encodings._MAXCACHE + 1000):
+            try:
+                b'x'.decode(f'nonexist_{i}')
+            except LookupError:
+                pass
+
+        self.assertLessEqual(len(encodings._cache), encodings._MAXCACHE)
 
 
 if __name__ == "__main__":

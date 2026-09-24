@@ -380,6 +380,7 @@ class Server(events.AbstractServer):
         except exceptions.CancelledError:
             try:
                 self.close()
+                self.close_clients()
                 await self.wait_closed()
             finally:
                 raise
@@ -483,10 +484,10 @@ class BaseEventLoop(events.AbstractEventLoop):
         If factory is None the default task factory will be set.
 
         If factory is a callable, it should have a signature matching
-        '(loop, coro, **kwargs)', where 'loop' will be a reference to the active
-        event loop, 'coro' will be a coroutine object, and **kwargs will be
-        arbitrary keyword arguments that should be passed on to Task.
-        The callable must return a Task.
+        '(loop, coro, **kwargs)', where 'loop' will be a reference to the
+        active event loop, 'coro' will be a coroutine object, and **kwargs
+        will be arbitrary keyword arguments that should be passed on to
+        Task.  The callable must return a Task.
         """
         if factory is not None and not callable(factory):
             raise TypeError('task factory must be a callable or None')
@@ -636,7 +637,7 @@ class BaseEventLoop(events.AbstractEventLoop):
     def _run_forever_setup(self):
         """Prepare the run loop to process events.
 
-        This method exists so that custom custom event loop subclasses (e.g., event loops
+        This method exists so that custom event loop subclasses (e.g., event loops
         that integrate a GUI event loop with Python's event loop) have access to all the
         loop setup logic.
         """
@@ -656,7 +657,7 @@ class BaseEventLoop(events.AbstractEventLoop):
     def _run_forever_cleanup(self):
         """Clean up after an event loop finishes the looping over events.
 
-        This method exists so that custom custom event loop subclasses (e.g., event loops
+        This method exists so that custom event loop subclasses (e.g., event loops
         that integrate a GUI event loop with Python's event loop) have access to all the
         loop cleanup logic.
         """
@@ -721,8 +722,8 @@ class BaseEventLoop(events.AbstractEventLoop):
     def stop(self):
         """Stop running the event loop.
 
-        Every callback already scheduled will still run.  This simply informs
-        run_forever to stop looping after a complete iteration.
+        Every callback already scheduled will still run.  This simply
+        informs run_forever to stop looping after a complete iteration.
         """
         self._stopping = True
 
@@ -963,7 +964,7 @@ class BaseEventLoop(events.AbstractEventLoop):
             f"and file {file!r} combination")
 
     async def _sock_sendfile_fallback(self, sock, file, offset, count):
-        if offset:
+        if hasattr(file, 'seek'):
             file.seek(offset)
         blocksize = (
             min(count, constants.SENDFILE_FALLBACK_READBUFFER_SIZE)
@@ -1016,38 +1017,43 @@ class BaseEventLoop(events.AbstractEventLoop):
         family, type_, proto, _, address = addr_info
         sock = None
         try:
-            sock = socket.socket(family=family, type=type_, proto=proto)
-            sock.setblocking(False)
-            if local_addr_infos is not None:
-                for lfamily, _, _, _, laddr in local_addr_infos:
-                    # skip local addresses of different family
-                    if lfamily != family:
-                        continue
-                    try:
-                        sock.bind(laddr)
-                        break
-                    except OSError as exc:
-                        msg = (
-                            f'error while attempting to bind on '
-                            f'address {laddr!r}: {str(exc).lower()}'
-                        )
-                        exc = OSError(exc.errno, msg)
-                        my_exceptions.append(exc)
-                else:  # all bind attempts failed
-                    if my_exceptions:
-                        raise my_exceptions.pop()
-                    else:
-                        raise OSError(f"no matching local address with {family=} found")
-            await self.sock_connect(sock, address)
-            return sock
-        except OSError as exc:
-            my_exceptions.append(exc)
-            if sock is not None:
-                sock.close()
-            raise
+            try:
+                sock = socket.socket(family=family, type=type_, proto=proto)
+                sock.setblocking(False)
+                if local_addr_infos is not None:
+                    for lfamily, _, _, _, laddr in local_addr_infos:
+                        # skip local addresses of different family
+                        if lfamily != family:
+                            continue
+                        try:
+                            sock.bind(laddr)
+                            break
+                        except OSError as exc:
+                            msg = (
+                                f'error while attempting to bind on '
+                                f'address {laddr!r}: {str(exc).lower()}'
+                            )
+                            exc = OSError(exc.errno, msg)
+                            my_exceptions.append(exc)
+                    else:  # all bind attempts failed
+                        if my_exceptions:
+                            raise my_exceptions.pop()
+                        else:
+                            raise OSError(f"no matching local address with {family=} found")
+                await self.sock_connect(sock, address)
+                return sock
+            except OSError as exc:
+                my_exceptions.append(exc)
+                raise
         except:
             if sock is not None:
-                sock.close()
+                try:
+                    sock.close()
+                except OSError:
+                    # An error when closing a newly created socket is
+                    # not important, but it can overwrite more important
+                    # non-OSError error. So ignore it.
+                    pass
             raise
         finally:
             exceptions = my_exceptions = None
@@ -1065,12 +1071,12 @@ class BaseEventLoop(events.AbstractEventLoop):
 
         Create a streaming transport connection to a given internet host and
         port: socket family AF_INET or socket.AF_INET6 depending on host (or
-        family if specified), socket type SOCK_STREAM. protocol_factory must be
-        a callable returning a protocol instance.
+        family if specified), socket type SOCK_STREAM. protocol_factory must
+        be a callable returning a protocol instance.
 
-        This method is a coroutine which will try to establish the connection
-        in the background.  When successful, the coroutine returns a
-        (transport, protocol) pair.
+        This method is a coroutine which will try to establish the
+        connection in the background.  When successful, the coroutine
+        returns a (transport, protocol) pair.
         """
         if server_hostname is not None and not ssl:
             raise ValueError('server_hostname is only meaningful with ssl')
@@ -1161,7 +1167,7 @@ class BaseEventLoop(events.AbstractEventLoop):
                         raise ExceptionGroup("create_connection failed", exceptions)
                     if len(exceptions) == 1:
                         raise exceptions[0]
-                    else:
+                    elif exceptions:
                         # If they all have the same str(), raise one.
                         model = str(exceptions[0])
                         if all(str(exc) == model for exc in exceptions):
@@ -1170,6 +1176,9 @@ class BaseEventLoop(events.AbstractEventLoop):
                         # the various error messages.
                         raise OSError('Multiple exceptions: {}'.format(
                             ', '.join(str(exc) for exc in exceptions)))
+                    else:
+                        # No exceptions were collected, raise a timeout error
+                        raise TimeoutError('create_connection failed')
                 finally:
                     exceptions = None
 
@@ -1205,19 +1214,24 @@ class BaseEventLoop(events.AbstractEventLoop):
             ssl_handshake_timeout=None,
             ssl_shutdown_timeout=None):
 
-        sock.setblocking(False)
+        try:
+            sock.setblocking(False)
 
-        protocol = protocol_factory()
-        waiter = self.create_future()
-        if ssl:
-            sslcontext = None if isinstance(ssl, bool) else ssl
-            transport = self._make_ssl_transport(
-                sock, protocol, sslcontext, waiter,
-                server_side=server_side, server_hostname=server_hostname,
-                ssl_handshake_timeout=ssl_handshake_timeout,
-                ssl_shutdown_timeout=ssl_shutdown_timeout)
-        else:
-            transport = self._make_socket_transport(sock, protocol, waiter)
+            protocol = protocol_factory()
+            waiter = self.create_future()
+            if ssl:
+                sslcontext = None if isinstance(ssl, bool) else ssl
+                transport = self._make_ssl_transport(
+                    sock, protocol, sslcontext, waiter,
+                    server_side=server_side, server_hostname=server_hostname,
+                    ssl_handshake_timeout=ssl_handshake_timeout,
+                    ssl_shutdown_timeout=ssl_shutdown_timeout)
+            else:
+                transport = self._make_socket_transport(sock, protocol, waiter)
+        except:
+            # gh-153133: close the socket if the transport is never created.
+            sock.close()
+            raise
 
         try:
             await waiter
@@ -1270,7 +1284,6 @@ class BaseEventLoop(events.AbstractEventLoop):
             raise RuntimeError(
                 f"fallback is disabled and native sendfile is not "
                 f"supported for transport {transport!r}")
-
         return await self._sendfile_fallback(transport, file,
                                              offset, count)
 
@@ -1279,7 +1292,7 @@ class BaseEventLoop(events.AbstractEventLoop):
             "sendfile syscall is not supported")
 
     async def _sendfile_fallback(self, transp, file, offset, count):
-        if offset:
+        if hasattr(file, 'seek'):
             file.seek(offset)
         blocksize = min(count, 16384) if count else 16384
         buf = bytearray(blocksize)
@@ -1336,6 +1349,17 @@ class BaseEventLoop(events.AbstractEventLoop):
         # Pause early so that "ssl_protocol.data_received()" doesn't
         # have a chance to get called before "ssl_protocol.connection_made()".
         transport.pause_reading()
+
+        # gh-142352: move buffered StreamReader data to SSLProtocol
+        if server_side:
+            from .streams import StreamReaderProtocol
+            if isinstance(protocol, StreamReaderProtocol):
+                stream_reader = getattr(protocol, '_stream_reader', None)
+                if stream_reader is not None:
+                    buffer = stream_reader._buffer
+                    if buffer:
+                        ssl_protocol._incoming.write(buffer)
+                        buffer.clear()
 
         transport.set_protocol(ssl_protocol)
         conmade_cb = self.call_soon(ssl_protocol.connection_made, transport)
@@ -1524,11 +1548,11 @@ class BaseEventLoop(events.AbstractEventLoop):
         The host parameter can be a string, in that case the TCP server is
         bound to host and port.
 
-        The host parameter can also be a sequence of strings and in that case
-        the TCP server is bound to all hosts of the sequence. If a host
-        appears multiple times (possibly indirectly e.g. when hostnames
-        resolve to the same IP address), the server is only bound once to that
-        host.
+        The host parameter can also be a sequence of strings and in that
+        case the TCP server is bound to all hosts of the sequence.  If
+        a host appears multiple times (possibly indirectly e.g. when
+        hostnames resolve to the same IP address), the server is only bound
+        once to that host.
 
         Return a Server object which can be used to stop the service.
 

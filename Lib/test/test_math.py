@@ -238,6 +238,19 @@ class MyIndexable(object):
     def __index__(self):
         return self.value
 
+# int subclass with broken arithmetic operators; implementations must
+# convert their arguments to exact ints instead of using these.
+class BadIntSubclass(int):
+    def _binop(self, other='ignored', mod=None):
+        return 42
+    __add__ = __radd__ = __sub__ = __rsub__ = _binop
+    __mul__ = __rmul__ = __mod__ = __rmod__ = _binop
+    __divmod__ = __rdivmod__ = __pow__ = __rpow__ = _binop
+    __floordiv__ = __rfloordiv__ = _binop
+    __lshift__ = __rlshift__ = __rshift__ = __rrshift__ = _binop
+    __and__ = __rand__ = __or__ = __ror__ = __xor__ = __rxor__ = _binop
+    __lt__ = __le__ = __gt__ = __ge__ = _binop
+
 class BadDescr:
     def __get__(self, obj, objtype=None):
         raise ValueError
@@ -324,6 +337,8 @@ class MathTests(unittest.TestCase):
         self.assertRaises(ValueError, math.atanh, NINF)
         self.assertTrue(math.isnan(math.atanh(NAN)))
 
+    @unittest.skipIf(sys.platform.startswith("sunos"),
+                     "skipping, see gh-138573")
     def testAtan2(self):
         self.assertRaises(TypeError, math.atan2)
         self.ftest('atan2(-1, 0)', math.atan2(-1, 0), -math.pi/2)
@@ -1115,6 +1130,16 @@ class MathTests(unittest.TestCase):
         self.assertIs(type(s), int)
         self.assertEqual(s, 41)
 
+        # Overridden operators of an int subclass must not affect the
+        # result.
+        s = math.isqrt(BadIntSubclass(10**20))
+        self.assertIs(type(s), int)
+        self.assertEqual(s, 10**10)
+
+        s = math.isqrt(BadIntSubclass(10**20 - 1))
+        self.assertIs(type(s), int)
+        self.assertEqual(s, 10**10 - 1)
+
         with self.assertRaises(ValueError):
             math.isqrt(IntegerLike(-3))
 
@@ -1213,6 +1238,12 @@ class MathTests(unittest.TestCase):
             self.assertEqual(math.ldexp(INF, n), INF)
             self.assertEqual(math.ldexp(NINF, n), NINF)
             self.assertTrue(math.isnan(math.ldexp(NAN, n)))
+
+    @requires_IEEE_754
+    def testLdexp_denormal(self):
+        # Denormal output incorrectly rounded (truncated)
+        # on some Windows.
+        self.assertEqual(math.ldexp(6993274598585239, -1126), 1e-323)
 
     def testLog(self):
         self.assertRaises(TypeError, math.log)
@@ -2773,11 +2804,8 @@ class FMATests(unittest.TestCase):
     @unittest.skipIf(
         sys.platform.startswith(("freebsd", "wasi", "netbsd", "emscripten"))
         or (sys.platform == "android" and platform.machine() == "x86_64")
-        or support.linked_to_musl(),  # gh-131032
+        or (support.linked_to_musl() and support.linked_to_musl() < (1, 2, 6)),  # gh-131032
         f"this platform doesn't implement IEE 754-2008 properly")
-    # gh-131032: musl is fixed but the fix is not yet released; when the fixed
-    # version is known change this to:
-    #   or support.linked_to_musl() < (1, <m>, <p>)
     def test_fma_zero_result(self):
         nonnegative_finites = [0.0, 1e-300, 2.3, 1e300]
 

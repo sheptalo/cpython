@@ -600,6 +600,21 @@ class StrTest(string_tests.StringLikeTest,
         text = 'abc def'
         self.assertIs(text.replace(pattern, pattern), text)
 
+    @support.nomemtest
+    def test_replace_oom(self):
+        # https://github.com/python/cpython/issues/152228
+        s1 = "轘" * 4
+        s2 = "&"
+        s3 = "&amp;"
+        assertion = self.assertRaises(MemoryError)
+        _testcapi.set_nomemory(0, 0)
+        try:
+            # No allocations made in the test itself:
+            with assertion:
+                s1.replace(s2, s3)  # this line used to crash before
+        finally:
+            _testcapi.remove_mem_hooks()
+
     def test_repeat_id_preserving(self):
         a = '123abc1@'
         b = '456zyx-+'
@@ -1231,10 +1246,10 @@ class StrTest(string_tests.StringLikeTest,
         self.assertEqual('{0:\x00^6}'.format(3), '\x00\x003\x00\x00\x00')
         self.assertEqual('{0:<6}'.format(3), '3     ')
 
-        self.assertEqual('{0:\x00<6}'.format(3.14), '3.14\x00\x00')
-        self.assertEqual('{0:\x01<6}'.format(3.14), '3.14\x01\x01')
-        self.assertEqual('{0:\x00^6}'.format(3.14), '\x003.14\x00')
-        self.assertEqual('{0:^6}'.format(3.14), ' 3.14 ')
+        self.assertEqual('{0:\x00<6}'.format(3.25), '3.25\x00\x00')
+        self.assertEqual('{0:\x01<6}'.format(3.25), '3.25\x01\x01')
+        self.assertEqual('{0:\x00^6}'.format(3.25), '\x003.25\x00')
+        self.assertEqual('{0:^6}'.format(3.25), ' 3.25 ')
 
         self.assertEqual('{0:\x00<12}'.format(3+2.0j), '(3+2j)\x00\x00\x00\x00\x00\x00')
         self.assertEqual('{0:\x01<12}'.format(3+2.0j), '(3+2j)\x01\x01\x01\x01\x01\x01')

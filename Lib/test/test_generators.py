@@ -134,6 +134,18 @@ class FinalizationTest(unittest.TestCase):
         self.assertEqual(len(resurrected), 1)
         self.assertIsInstance(resurrected[0].gi_code, types.CodeType)
 
+    def test_exhausted_generator_frame_cycle(self):
+        def g():
+            yield
+
+        generator = g()
+        frame = generator.gi_frame
+        self.assertIsNone(frame.f_back)
+        next(generator)
+        self.assertIsNone(frame.f_back)
+        next(generator, None)
+        self.assertIsNone(frame.f_back)
+
 
 class GeneratorTest(unittest.TestCase):
 
@@ -288,8 +300,35 @@ class GeneratorTest(unittest.TestCase):
             def __iter__(self):
                 return Iterator()
 
-        self.assertEqual([1,2], list(i for i in C()))
+        self.assertEqual([1, 2], list(i for i in C()))
 
+    def test_close_clears_frame(self):
+        # gh-142766: Test that closing a generator clears its frame
+        class DetectDelete:
+            def __init__(self):
+                DetectDelete.deleted = False
+
+            def __del__(self):
+                DetectDelete.deleted = True
+
+        def generator(arg):
+            yield
+
+        # Test a freshly created generator (not suspended)
+        g = generator(DetectDelete())
+        g.close()
+        self.assertTrue(DetectDelete.deleted)
+
+        # Test a suspended generator
+        g = generator(DetectDelete())
+        next(g)
+        g.close()
+        self.assertTrue(DetectDelete.deleted)
+
+        # Clear via gi_frame.clear()
+        g = generator(DetectDelete())
+        g.gi_frame.clear()
+        self.assertTrue(DetectDelete.deleted)
 
 class ModifyUnderlyingIterableTest(unittest.TestCase):
     iterables = [
@@ -318,21 +357,26 @@ class ModifyUnderlyingIterableTest(unittest.TestCase):
                 yield x
         return gen(range(10))
 
-    def process_tests(self, get_generator):
+    def process_tests(self, get_generator, is_expr):
+        err_iterator = "'.*' object is not an iterator"
+        err_iterable = "'.*' object is not iterable"
         for obj in self.iterables:
             g_obj = get_generator(obj)
             with self.subTest(g_obj=g_obj, obj=obj):
-                self.assertListEqual(list(g_obj), list(obj))
+                if is_expr:
+                    self.assertRaisesRegex(TypeError, err_iterator, list, g_obj)
+                else:
+                    self.assertListEqual(list(g_obj), list(obj))
 
             g_iter = get_generator(iter(obj))
             with self.subTest(g_iter=g_iter, obj=obj):
                 self.assertListEqual(list(g_iter), list(obj))
 
-        err_regex = "'.*' object is not iterable"
         for obj in self.non_iterables:
             g_obj = get_generator(obj)
             with self.subTest(g_obj=g_obj):
-                self.assertRaisesRegex(TypeError, err_regex, list, g_obj)
+                err = err_iterator if is_expr else err_iterable
+                self.assertRaisesRegex(TypeError, err, list, g_obj)
 
     def test_modify_f_locals(self):
         def modify_f_locals(g, local, obj):
@@ -345,8 +389,8 @@ class ModifyUnderlyingIterableTest(unittest.TestCase):
         def get_generator_genfunc(obj):
             return modify_f_locals(self.genfunc(), 'it', obj)
 
-        self.process_tests(get_generator_genexpr)
-        self.process_tests(get_generator_genfunc)
+        self.process_tests(get_generator_genexpr, True)
+        self.process_tests(get_generator_genfunc, False)
 
     def test_new_gen_from_gi_code(self):
         def new_gen_from_gi_code(g, obj):
@@ -359,8 +403,8 @@ class ModifyUnderlyingIterableTest(unittest.TestCase):
         def get_generator_genfunc(obj):
             return new_gen_from_gi_code(self.genfunc(), obj)
 
-        self.process_tests(get_generator_genexpr)
-        self.process_tests(get_generator_genfunc)
+        self.process_tests(get_generator_genexpr, True)
+        self.process_tests(get_generator_genfunc, False)
 
 
 class ExceptionTest(unittest.TestCase):

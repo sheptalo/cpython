@@ -13,7 +13,7 @@ the python source tree and run:
 Alternatively, you can run 'make regen-keyword'.
 """
 
-__all__ = ["iskeyword", "issoftkeyword", "kwlist", "softkwlist"]
+__all__ = ["iskeyword", "issoftkeyword", "kwaliases", "kwlist", "softkwlist"]
 
 kwlist = [
     'False',
@@ -50,15 +50,95 @@ kwlist = [
     'try',
     'while',
     'with',
-    'yield'
+    'yield',
+    'Истина',
+    'Ложь',
+    'Ничто',
+    'асинхронно',
+    'в',
+    'вернуть',
+    'выдать',
+    'глобально',
+    'для',
+    'если',
+    'есть',
+    'и',
+    'из',
+    'или',
+    'импорт',
+    'иначе',
+    'иначеесли',
+    'исключение',
+    'используя',
+    'как',
+    'класс',
+    'лямбда',
+    'наконец',
+    'не',
+    'нелокально',
+    'ожидать',
+    'поднять',
+    'пока',
+    'попробовать',
+    'прервать',
+    'продолжить',
+    'пропустить',
+    'удалить',
+    'утверждать',
+    'функция'
 ]
 
 softkwlist = [
     '_',
     'case',
     'match',
-    'type'
+    'type',
+    'случай',
+    'сопоставить',
+    'тип'
 ]
+
+# Maps each alias of a keyword or soft keyword to that keyword.
+kwaliases = {
+    'Ложь': 'False',
+    'Ничто': 'None',
+    'Истина': 'True',
+    'и': 'and',
+    'как': 'as',
+    'утверждать': 'assert',
+    'асинхронно': 'async',
+    'ожидать': 'await',
+    'прервать': 'break',
+    'случай': 'case',
+    'класс': 'class',
+    'продолжить': 'continue',
+    'функция': 'def',
+    'удалить': 'del',
+    'иначеесли': 'elif',
+    'иначе': 'else',
+    'исключение': 'except',
+    'наконец': 'finally',
+    'для': 'for',
+    'из': 'from',
+    'глобально': 'global',
+    'если': 'if',
+    'импорт': 'import',
+    'в': 'in',
+    'есть': 'is',
+    'лямбда': 'lambda',
+    'сопоставить': 'match',
+    'нелокально': 'nonlocal',
+    'не': 'not',
+    'или': 'or',
+    'пропустить': 'pass',
+    'поднять': 'raise',
+    'вернуть': 'return',
+    'попробовать': 'try',
+    'тип': 'type',
+    'пока': 'while',
+    'используя': 'with',
+    'выдать': 'yield'
+}
 
 iskeyword = frozenset(kwlist).__contains__
 issoftkeyword = frozenset(softkwlist).__contains__

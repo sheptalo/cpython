@@ -134,10 +134,14 @@ DEFAULT_ERROR_MESSAGE = """\
 
 DEFAULT_ERROR_CONTENT_TYPE = "text/html;charset=utf-8"
 
+# Data larger than this will be read in chunks, to prevent extreme
+# overallocation.
+_MIN_READ_BUF_SIZE = 1 << 20
+
 class HTTPServer(socketserver.TCPServer):
 
     allow_reuse_address = True    # Seems to make sense in testing environment
-    allow_reuse_port = True
+    allow_reuse_port = False
 
     def server_bind(self):
         """Override server_bind to store the server name."""
@@ -324,6 +328,7 @@ class BaseHTTPRequestHandler(socketserver.StreamRequestHandler):
         error response has already been sent back.
 
         """
+        is_http_0_9 = False
         self.command = None  # set in case of error on the first line
         self.request_version = version = self.default_request_version
         self.close_connection = True
@@ -355,10 +360,13 @@ class BaseHTTPRequestHandler(socketserver.StreamRequestHandler):
                     raise ValueError("unreasonable length http version")
                 version_number = int(version_number[0]), int(version_number[1])
             except (ValueError, IndexError):
+                # Send the error response with a status line and headers.
+                self.request_version = ''
                 self.send_error(
                     HTTPStatus.BAD_REQUEST,
                     "Bad request version (%r)" % version)
                 return False
+            self.request_version = version
             if version_number >= (1, 1) and self.protocol_version >= "HTTP/1.1":
                 self.close_connection = False
             if version_number >= (2, 0):
@@ -366,9 +374,9 @@ class BaseHTTPRequestHandler(socketserver.StreamRequestHandler):
                     HTTPStatus.HTTP_VERSION_NOT_SUPPORTED,
                     "Invalid HTTP version (%s)" % base_version_number)
                 return False
-            self.request_version = version
 
         if not 2 <= len(words) <= 3:
+            self.request_version = ''
             self.send_error(
                 HTTPStatus.BAD_REQUEST,
                 "Bad request syntax (%r)" % requestline)
@@ -377,10 +385,12 @@ class BaseHTTPRequestHandler(socketserver.StreamRequestHandler):
         if len(words) == 2:
             self.close_connection = True
             if command != 'GET':
+                self.request_version = ''
                 self.send_error(
                     HTTPStatus.BAD_REQUEST,
                     "Bad HTTP/0.9 request type (%r)" % command)
                 return False
+            is_http_0_9 = True
         self.command, self.path = command, path
 
         # gh-87389: The purpose of replacing '//' with '/' is to protect
@@ -389,6 +399,11 @@ class BaseHTTPRequestHandler(socketserver.StreamRequestHandler):
         # without scheme (similar to http://path) rather than a path.
         if self.path.startswith('//'):
             self.path = '/' + self.path.lstrip('/')  # Reduce to a single /
+
+        # For HTTP/0.9, headers are not expected at all.
+        if is_http_0_9:
+            self.headers = {}
+            return True
 
         # Examine the headers and look for a Connection directive.
         try:
@@ -1277,7 +1292,18 @@ class CGIHTTPRequestHandler(SimpleHTTPRequestHandler):
                                  env = env
                                  )
             if self.command.lower() == "post" and nbytes > 0:
-                data = self.rfile.read(nbytes)
+                cursize = 0
+                data = self.rfile.read(min(nbytes, _MIN_READ_BUF_SIZE))
+                while len(data) < nbytes and len(data) != cursize:
+                    cursize = len(data)
+                    # This is a geometric increase in read size (never more
+                    # than doubling out the current length of data per loop
+                    # iteration).
+                    delta = min(cursize, nbytes - cursize)
+                    try:
+                        data += self.rfile.read(delta)
+                    except TimeoutError:
+                        break
             else:
                 data = None
             # throw away additional data [see bug #427345]
@@ -1320,8 +1346,8 @@ def test(HandlerClass=BaseHTTPRequestHandler,
     HandlerClass.protocol_version = protocol
 
     if tls_cert:
-        server = ThreadingHTTPSServer(addr, HandlerClass, certfile=tls_cert,
-                                      keyfile=tls_key, password=tls_password)
+        server = ServerClass(addr, HandlerClass, certfile=tls_cert,
+                             keyfile=tls_key, password=tls_password)
     else:
         server = ServerClass(addr, HandlerClass)
 
@@ -1387,7 +1413,7 @@ if __name__ == '__main__':
         handler_class = SimpleHTTPRequestHandler
 
     # ensure dual-stack is not disabled; ref #38907
-    class DualStackServer(ThreadingHTTPServer):
+    class DualStackServerMixin:
 
         def server_bind(self):
             # suppress exception when protocol is IPv4
@@ -1400,9 +1426,16 @@ if __name__ == '__main__':
             self.RequestHandlerClass(request, client_address, self,
                                      directory=args.directory)
 
+    class HTTPDualStackServer(DualStackServerMixin, ThreadingHTTPServer):
+        pass
+    class HTTPSDualStackServer(DualStackServerMixin, ThreadingHTTPSServer):
+        pass
+
+    ServerClass = HTTPSDualStackServer if args.tls_cert else HTTPDualStackServer
+
     test(
         HandlerClass=handler_class,
-        ServerClass=DualStackServer,
+        ServerClass=ServerClass,
         port=args.port,
         bind=args.bind,
         protocol=args.protocol,

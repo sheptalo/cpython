@@ -316,11 +316,12 @@ raise_errmsg(const char *msg, PyObject *s, Py_ssize_t end)
 
     PyObject *exc;
     exc = PyObject_CallFunction(JSONDecodeError, "zOn", msg, s, end);
-    Py_DECREF(JSONDecodeError);
     if (exc) {
         PyErr_SetObject(JSONDecodeError, exc);
         Py_DECREF(exc);
     }
+
+    Py_DECREF(JSONDecodeError);
 }
 
 static void
@@ -473,7 +474,7 @@ scanstring_unicode(PyObject *pystr, Py_ssize_t end, int strict, Py_ssize_t *next
             c = 0;
             next++;
             end = next + 4;
-            if (end >= len) {
+            if (end > len) {
                 raise_errmsg("Invalid \\uXXXX escape", pystr, next - 1);
                 goto bail;
             }
@@ -1228,15 +1229,22 @@ encoder_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
     static char *kwlist[] = {"markers", "default", "encoder", "indent", "key_separator", "item_separator", "sort_keys", "skipkeys", "allow_nan", NULL};
 
     PyEncoderObject *s;
-    PyObject *markers = Py_None, *defaultfn, *encoder, *indent, *key_separator;
+    PyObject *markers, *defaultfn, *encoder, *indent, *key_separator;
     PyObject *item_separator;
     int sort_keys, skipkeys, allow_nan;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!?OOOUUppp:make_encoder", kwlist,
-        &PyDict_Type, &markers, &defaultfn, &encoder, &indent,
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOOOUUppp:make_encoder", kwlist,
+        &markers, &defaultfn, &encoder, &indent,
         &key_separator, &item_separator,
         &sort_keys, &skipkeys, &allow_nan))
         return NULL;
+
+    if (markers != Py_None && !PyDict_Check(markers)) {
+        PyErr_Format(PyExc_TypeError,
+                     "make_encoder() argument 1 must be dict or None, "
+                     "not %.200s", Py_TYPE(markers)->tp_name);
+        return NULL;
+    }
 
     s = (PyEncoderObject *)type->tp_alloc(type, 0);
     if (s == NULL)
@@ -1375,6 +1383,7 @@ encoder_call(PyObject *op, PyObject *args, PyObject *kwds)
             return NULL;
         }
     }
+    indent_level = 0;
     if (encoder_listencode_obj(self, writer, obj, indent_level, indent_cache)) {
         PyUnicodeWriter_Discard(writer);
         Py_XDECREF(indent_cache);
@@ -1476,13 +1485,13 @@ encoder_listencode_obj(PyEncoderObject *s, PyUnicodeWriter *writer,
     int rv;
 
     if (obj == Py_None) {
-      return PyUnicodeWriter_WriteUTF8(writer, "null", 4);
+      return PyUnicodeWriter_WriteASCII(writer, "null", 4);
     }
     else if (obj == Py_True) {
-      return PyUnicodeWriter_WriteUTF8(writer, "true", 4);
+      return PyUnicodeWriter_WriteASCII(writer, "true", 4);
     }
     else if (obj == Py_False) {
-      return PyUnicodeWriter_WriteUTF8(writer, "false", 5);
+      return PyUnicodeWriter_WriteASCII(writer, "false", 5);
     }
     else if (PyUnicode_Check(obj)) {
         PyObject *encoded = encoder_encode_string(s, obj);
@@ -1609,6 +1618,12 @@ encoder_encode_key_value(PyEncoderObject *s, PyUnicodeWriter *writer, bool *firs
 
     if (*first) {
         *first = false;
+        if (s->indent != Py_None) {
+            if (write_newline_indent(writer, indent_level, indent_cache) < 0) {
+                Py_DECREF(keystr);
+                return -1;
+            }
+        }
     }
     else {
         if (PyUnicodeWriter_WriteStr(writer, item_separator) < 0) {
@@ -1649,7 +1664,7 @@ encoder_listencode_dict(PyEncoderObject *s, PyUnicodeWriter *writer,
 
     if (PyDict_GET_SIZE(dct) == 0) {
         /* Fast path */
-        return PyUnicodeWriter_WriteUTF8(writer, "{}", 2);
+        return PyUnicodeWriter_WriteASCII(writer, "{}", 2);
     }
 
     if (s->markers != Py_None) {
@@ -1676,11 +1691,8 @@ encoder_listencode_dict(PyEncoderObject *s, PyUnicodeWriter *writer,
     if (s->indent != Py_None) {
         indent_level++;
         separator = get_item_separator(s, indent_level, indent_cache);
-        if (separator == NULL ||
-            write_newline_indent(writer, indent_level, indent_cache) < 0)
-        {
+        if (separator == NULL)
             goto bail;
-        }
     }
 
     if (s->sort_keys || !PyDict_CheckExact(dct)) {
@@ -1690,9 +1702,13 @@ encoder_listencode_dict(PyEncoderObject *s, PyUnicodeWriter *writer,
 
         for (Py_ssize_t  i = 0; i < PyList_GET_SIZE(items); i++) {
             PyObject *item = PyList_GET_ITEM(items, i);
+            // gh-142831: encoder_encode_key_value() can invoke user code
+            // that mutates the items list, invalidating this borrowed ref.
+            Py_INCREF(item);
 
             if (!PyTuple_Check(item) || PyTuple_GET_SIZE(item) != 2) {
                 PyErr_SetString(PyExc_ValueError, "items must return 2-tuples");
+                Py_DECREF(item);
                 goto bail;
             }
 
@@ -1700,18 +1716,30 @@ encoder_listencode_dict(PyEncoderObject *s, PyUnicodeWriter *writer,
             value = PyTuple_GET_ITEM(item, 1);
             if (encoder_encode_key_value(s, writer, &first, dct, key, value,
                                          indent_level, indent_cache,
-                                         separator) < 0)
+                                         separator) < 0) {
+                Py_DECREF(item);
                 goto bail;
+            }
+            Py_DECREF(item);
         }
         Py_CLEAR(items);
 
     } else {
         Py_ssize_t pos = 0;
         while (PyDict_Next(dct, &pos, &key, &value)) {
+            // gh-142831: encoder_encode_key_value() can invoke user code
+            // that mutates the dict, invalidating these borrowed refs.
+            Py_INCREF(key);
+            Py_INCREF(value);
             if (encoder_encode_key_value(s, writer, &first, dct, key, value,
                                          indent_level, indent_cache,
-                                         separator) < 0)
+                                         separator) < 0) {
+                Py_DECREF(key);
+                Py_DECREF(value);
                 goto bail;
+            }
+            Py_DECREF(key);
+            Py_DECREF(value);
         }
     }
 
@@ -1720,7 +1748,7 @@ encoder_listencode_dict(PyEncoderObject *s, PyUnicodeWriter *writer,
             goto bail;
         Py_CLEAR(ident);
     }
-    if (s->indent != Py_None) {
+    if (s->indent != Py_None && !first) {
         indent_level--;
         if (write_newline_indent(writer, indent_level, indent_cache) < 0) {
             goto bail;
@@ -1753,7 +1781,7 @@ encoder_listencode_list(PyEncoderObject *s, PyUnicodeWriter *writer,
         return -1;
     if (PySequence_Fast_GET_SIZE(s_fast) == 0) {
         Py_DECREF(s_fast);
-        return PyUnicodeWriter_WriteUTF8(writer, "[]", 2);
+        return PyUnicodeWriter_WriteASCII(writer, "[]", 2);
     }
 
     if (s->markers != Py_None) {
@@ -1788,14 +1816,21 @@ encoder_listencode_list(PyEncoderObject *s, PyUnicodeWriter *writer,
     }
     for (i = 0; i < PySequence_Fast_GET_SIZE(s_fast); i++) {
         PyObject *obj = PySequence_Fast_GET_ITEM(s_fast, i);
+        // gh-142831: encoder_listencode_obj() can invoke user code
+        // that mutates the sequence, invalidating this borrowed ref.
+        Py_INCREF(obj);
         if (i) {
-            if (PyUnicodeWriter_WriteStr(writer, separator) < 0)
+            if (PyUnicodeWriter_WriteStr(writer, separator) < 0) {
+                Py_DECREF(obj);
                 goto bail;
+            }
         }
         if (encoder_listencode_obj(s, writer, obj, indent_level, indent_cache)) {
             _PyErr_FormatNote("when serializing %T item %zd", seq, i);
+            Py_DECREF(obj);
             goto bail;
         }
+        Py_DECREF(obj);
     }
     if (ident != NULL) {
         if (PyDict_DelItem(s->markers, ident))

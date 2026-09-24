@@ -729,7 +729,7 @@ class _BaseNetwork(_IPAddressBase):
             return NotImplemented
 
     def __hash__(self):
-        return hash(int(self.network_address) ^ int(self.netmask))
+        return hash((int(self.network_address), int(self.netmask)))
 
     def __contains__(self, other):
         # always false if one is v4 and the other is v6.
@@ -1545,7 +1545,7 @@ class IPv4Network(_BaseV4, _BaseNetwork):
         if self._prefixlen == (self.max_prefixlen - 1):
             self.hosts = self.__iter__
         elif self._prefixlen == (self.max_prefixlen):
-            self.hosts = lambda: [IPv4Address(addr)]
+            self.hosts = lambda: iter((IPv4Address(addr),))
 
     @property
     @functools.lru_cache()
@@ -1660,8 +1660,18 @@ class _BaseV6:
         """
         if not ip_str:
             raise AddressValueError('Address cannot be empty')
+        if len(ip_str) > 45:
+            shorten = ip_str
+            if len(shorten) > 100:
+                shorten = f'{ip_str[:45]}({len(ip_str)-90} chars elided){ip_str[-45:]}'
+            raise AddressValueError(f"At most 45 characters expected in "
+                                    f"{shorten!r}")
 
-        parts = ip_str.split(':')
+        # We want to allow more parts than the max to be 'split'
+        # to preserve the correct error message when there are
+        # too many parts combined with '::'
+        _max_parts = cls._HEXTET_COUNT + 1
+        parts = ip_str.split(':', maxsplit=_max_parts)
 
         # An IPv6 address needs at least 2 colons (3 parts).
         _min_parts = 3
@@ -1681,7 +1691,6 @@ class _BaseV6:
         # An IPv6 address can't have more than 8 colons (9 parts).
         # The extra colon comes from using the "::" notation for a single
         # leading or trailing zero part.
-        _max_parts = cls._HEXTET_COUNT + 1
         if len(parts) > _max_parts:
             msg = "At most %d colons permitted in %r" % (_max_parts-1, ip_str)
             raise AddressValueError(msg)
@@ -1860,14 +1869,18 @@ class _BaseV6:
         elif isinstance(self, IPv6Interface):
             ip_str = str(self.ip)
         else:
-            ip_str = str(self)
+            ip_str = self._string_from_ip_int(self._ip)
 
         ip_int = self._ip_int_from_string(ip_str)
         hex_str = '%032x' % ip_int
-        parts = [hex_str[x:x+4] for x in range(0, 32, 4)]
-        if isinstance(self, (_BaseNetwork, IPv6Interface)):
-            return '%s/%d' % (':'.join(parts), self._prefixlen)
-        return ':'.join(parts)
+        exploded = ':'.join([hex_str[x:x+4] for x in range(0, 32, 4)])
+        if isinstance(self, _BaseNetwork):
+            return '%s/%d' % (exploded, self._prefixlen)
+        if self._scope_id:
+            exploded = '%s%%%s' % (exploded, self._scope_id)
+        if isinstance(self, IPv6Interface):
+            return '%s/%d' % (exploded, self._prefixlen)
+        return exploded
 
     def _reverse_pointer(self):
         """Return the reverse DNS pointer name for the IPv6 address.
@@ -2327,7 +2340,7 @@ class IPv6Network(_BaseV6, _BaseNetwork):
         if self._prefixlen == (self.max_prefixlen - 1):
             self.hosts = self.__iter__
         elif self._prefixlen == self.max_prefixlen:
-            self.hosts = lambda: [IPv6Address(addr)]
+            self.hosts = lambda: iter((IPv6Address(addr),))
 
     def hosts(self):
         """Generate Iterator over usable hosts in a network.

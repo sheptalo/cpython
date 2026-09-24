@@ -10,6 +10,7 @@
 #include "pycore_descrobject.h"   // _PyMethodWrapper_Type
 #include "pycore_dict.h"          // _PyObject_MaterializeManagedDict()
 #include "pycore_floatobject.h"   // _PyFloat_DebugMallocStats()
+#include "pycore_function.h"      // _PyClassMethod_GetFunc()
 #include "pycore_freelist.h"      // _PyObject_ClearFreeLists()
 #include "pycore_genobject.h"     // _PyAsyncGenAThrow_Type
 #include "pycore_hamt.h"          // _PyHamtItems_Type
@@ -685,6 +686,8 @@ PyObject_Print(PyObject *op, FILE *fp, int flags)
             ret = -1;
         }
     }
+
+    _Py_LeaveRecursiveCall();
     return ret;
 }
 
@@ -711,7 +714,7 @@ _PyObject_IsFreed(PyObject *op)
 }
 
 
-/* For debugging convenience.  See Misc/gdbinit for some useful gdb hooks */
+/* For debugging convenience. */
 void
 _PyObject_Dump(PyObject* op)
 {
@@ -1664,6 +1667,142 @@ _PyObject_GetMethod(PyObject *obj, PyObject *name, PyObject **method)
     return 0;
 }
 
+// Look up a method on `self` by `name`.
+//
+// On success, `*method` is set and the function returns 0 or 1. If the
+// return value is 1, the call is an unbound method and `*self` is the
+// "self" or "cls" argument to pass. If the return value is 0, the call is
+// a regular function and `*self` is cleared.
+//
+// On error, returns -1, clears `*self`, and sets an exception.
+int
+_PyObject_GetMethodStackRef(PyThreadState *ts, _PyStackRef *self,
+                            PyObject *name, _PyStackRef *method)
+{
+    int meth_found = 0;
+    PyObject *obj = PyStackRef_AsPyObjectBorrow(*self);
+
+    assert(PyStackRef_IsNull(*method));
+
+    PyTypeObject *tp = Py_TYPE(obj);
+    if (!_PyType_IsReady(tp)) {
+        if (PyType_Ready(tp) < 0) {
+            PyStackRef_CLEAR(*self);
+            return -1;
+        }
+    }
+
+    if (tp->tp_getattro != PyObject_GenericGetAttr || !PyUnicode_CheckExact(name)) {
+        PyObject *res = PyObject_GetAttr(obj, name);
+        PyStackRef_CLEAR(*self);
+        if (res != NULL) {
+            *method = PyStackRef_FromPyObjectSteal(res);
+            return 0;
+        }
+        return -1;
+    }
+
+    _PyType_LookupStackRefAndVersion(tp, name, method);
+    PyObject *descr = PyStackRef_AsPyObjectBorrow(*method);
+    descrgetfunc f = NULL;
+    if (descr != NULL) {
+        if (_PyType_HasFeature(Py_TYPE(descr), Py_TPFLAGS_METHOD_DESCRIPTOR)) {
+            meth_found = 1;
+        }
+        else {
+            f = Py_TYPE(descr)->tp_descr_get;
+            if (f != NULL && PyDescr_IsData(descr)) {
+                PyObject *value = f(descr, obj, (PyObject *)Py_TYPE(obj));
+                PyStackRef_CLEAR(*method);
+                PyStackRef_CLEAR(*self);
+                if (value != NULL) {
+                    *method = PyStackRef_FromPyObjectSteal(value);
+                    return 0;
+                }
+                return -1;
+            }
+        }
+    }
+    PyObject *dict, *attr;
+    if ((tp->tp_flags & Py_TPFLAGS_INLINE_VALUES) &&
+         _PyObject_TryGetInstanceAttribute(obj, name, &attr)) {
+        if (attr != NULL) {
+            PyStackRef_XSETREF(*method, PyStackRef_FromPyObjectSteal(attr));
+            PyStackRef_CLEAR(*self);
+            return 0;
+        }
+        dict = NULL;
+    }
+    else if ((tp->tp_flags & Py_TPFLAGS_MANAGED_DICT)) {
+        dict = (PyObject *)_PyObject_GetManagedDict(obj);
+    }
+    else {
+        PyObject **dictptr = _PyObject_ComputedDictPointer(obj);
+        if (dictptr != NULL) {
+            dict = FT_ATOMIC_LOAD_PTR_ACQUIRE(*dictptr);
+        }
+        else {
+            dict = NULL;
+        }
+    }
+    if (dict != NULL) {
+        assert(PyUnicode_CheckExact(name));
+        int found = _PyDict_GetMethodStackRef((PyDictObject *)dict, name, method);
+        if (found < 0) {
+            assert(PyStackRef_IsNull(*method));
+            PyStackRef_CLEAR(*self);
+            return -1;
+        }
+        else if (found) {
+            PyStackRef_CLEAR(*self);
+            return 0;
+        }
+    }
+
+    if (meth_found) {
+        assert(!PyStackRef_IsNull(*method));
+        return 1;
+    }
+
+    if (f != NULL) {
+        if (Py_IS_TYPE(descr, &PyClassMethod_Type)) {
+            PyObject *callable = _PyClassMethod_GetFunc(descr);
+            PyStackRef_XSETREF(*method, PyStackRef_FromPyObjectNew(callable));
+            PyStackRef_XSETREF(*self, PyStackRef_FromPyObjectNew((PyObject *)tp));
+            return 1;
+        }
+        else if (Py_IS_TYPE(descr, &PyStaticMethod_Type)) {
+            PyObject *callable = _PyStaticMethod_GetFunc(descr);
+            PyStackRef_XSETREF(*method, PyStackRef_FromPyObjectNew(callable));
+            PyStackRef_CLEAR(*self);
+            return 0;
+        }
+        PyObject *value = f(descr, obj, (PyObject *)tp);
+        PyStackRef_CLEAR(*method);
+        PyStackRef_CLEAR(*self);
+        if (value) {
+            *method = PyStackRef_FromPyObjectSteal(value);
+            return 0;
+        }
+        return -1;
+    }
+
+    if (descr != NULL) {
+        assert(!PyStackRef_IsNull(*method));
+        PyStackRef_CLEAR(*self);
+        return 0;
+    }
+
+    PyErr_Format(PyExc_AttributeError,
+                 "'%.100s' object has no attribute '%U'",
+                 tp->tp_name, name);
+
+    _PyObject_SetAttributeErrorContext(obj, name);
+    assert(PyStackRef_IsNull(*method));
+    PyStackRef_CLEAR(*self);
+    return -1;
+}
+
 /* Generic GetAttr functions - put these in your tp_[gs]etattro slot. */
 
 PyObject *
@@ -1817,7 +1956,7 @@ _PyObject_GenericSetAttrWithDict(PyObject *obj, PyObject *name,
     }
 
     Py_INCREF(name);
-    Py_INCREF(tp);
+    _Py_INCREF_TYPE(tp);
 
     PyThreadState *tstate = _PyThreadState_GET();
     _PyCStackRef cref;
@@ -1892,7 +2031,7 @@ _PyObject_GenericSetAttrWithDict(PyObject *obj, PyObject *name,
     }
   done:
     _PyThreadState_PopCStackRef(tstate, &cref);
-    Py_DECREF(tp);
+    _Py_DECREF_TYPE(tp);
     Py_DECREF(name);
     return res;
 }
@@ -1906,34 +2045,11 @@ PyObject_GenericSetAttr(PyObject *obj, PyObject *name, PyObject *value)
 int
 PyObject_GenericSetDict(PyObject *obj, PyObject *value, void *context)
 {
-    PyObject **dictptr = _PyObject_GetDictPtr(obj);
-    if (dictptr == NULL) {
-        if (_PyType_HasFeature(Py_TYPE(obj), Py_TPFLAGS_INLINE_VALUES) &&
-            _PyObject_GetManagedDict(obj) == NULL
-        ) {
-            /* Was unable to convert to dict */
-            PyErr_NoMemory();
-        }
-        else {
-            PyErr_SetString(PyExc_AttributeError,
-                            "This object has no __dict__");
-        }
-        return -1;
-    }
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError, "cannot delete __dict__");
         return -1;
     }
-    if (!PyDict_Check(value)) {
-        PyErr_Format(PyExc_TypeError,
-                     "__dict__ must be set to a dictionary, "
-                     "not a '%.200s'", Py_TYPE(value)->tp_name);
-        return -1;
-    }
-    Py_BEGIN_CRITICAL_SECTION(obj);
-    Py_XSETREF(*dictptr, Py_NewRef(value));
-    Py_END_CRITICAL_SECTION();
-    return 0;
+    return _PyObject_SetDict(obj, value);
 }
 
 
@@ -1996,9 +2112,25 @@ _dir_locals(void)
     PyObject *names;
     PyObject *locals;
 
-    locals = _PyEval_GetFrameLocals();
-    if (locals == NULL)
+    if (_PyEval_GetFrame() != NULL) {
+        locals = _PyEval_GetFrameLocals();
+    }
+    else {
+        PyThreadState *tstate = _PyThreadState_GET();
+        locals = _PyEval_GetGlobalsFromRunningMain(tstate);
+        if (locals == NULL) {
+            if (!_PyErr_Occurred(tstate)) {
+                locals = _PyEval_GetFrameLocals();
+                assert(_PyErr_Occurred(tstate));
+            }
+        }
+        else {
+            Py_INCREF(locals);
+        }
+    }
+    if (locals == NULL) {
         return NULL;
+    }
 
     names = PyMapping_Keys(locals);
     Py_DECREF(locals);
@@ -2548,21 +2680,14 @@ _Py_NewReferenceNoTotal(PyObject *op)
 void
 _Py_SetImmortalUntracked(PyObject *op)
 {
-#ifdef Py_DEBUG
-    // For strings, use _PyUnicode_InternImmortal instead.
-    if (PyUnicode_CheckExact(op)) {
-        assert(PyUnicode_CHECK_INTERNED(op) == SSTATE_INTERNED_IMMORTAL
-            || PyUnicode_CHECK_INTERNED(op) == SSTATE_INTERNED_IMMORTAL_STATIC);
-    }
-#endif
     // Check if already immortal to avoid degrading from static immortal to plain immortal
     if (_Py_IsImmortal(op)) {
         return;
     }
 #ifdef Py_GIL_DISABLED
-    op->ob_tid = _Py_UNOWNED_TID;
-    op->ob_ref_local = _Py_IMMORTAL_REFCNT_LOCAL;
-    op->ob_ref_shared = 0;
+    _Py_atomic_store_uintptr_relaxed(&op->ob_tid, _Py_UNOWNED_TID);
+    _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, _Py_IMMORTAL_REFCNT_LOCAL);
+    _Py_atomic_store_ssize_relaxed(&op->ob_ref_shared, 0);
     _Py_atomic_or_uint8(&op->ob_gc_bits, _PyGC_BITS_DEFERRED);
 #elif SIZEOF_VOID_P > 4
     op->ob_flags = _Py_IMMORTAL_FLAGS;
@@ -2603,6 +2728,13 @@ PyUnstable_Object_EnableDeferredRefcount(PyObject *op)
         return 0;
     }
 
+    if (!PyObject_GC_IsTracked(op)) {
+        // When deferred refcount is enabled, the object will only be
+        // deallocated by the tracing garbage collector. So it must be tracked
+        // by the garbage collector.
+        return 0;
+    }
+
     uint8_t bits = _Py_atomic_load_uint8(&op->ob_gc_bits);
     if ((bits & _PyGC_BITS_DEFERRED) != 0)
     {
@@ -2638,8 +2770,12 @@ PyUnstable_Object_IsUniqueReferencedTemporary(PyObject *op)
     _PyStackRef *stackpointer = frame->stackpointer;
     while (stackpointer > base) {
         stackpointer--;
-        if (op == PyStackRef_AsPyObjectBorrow(*stackpointer)) {
-            return PyStackRef_IsHeapSafe(*stackpointer);
+        _PyStackRef ref = *stackpointer;
+        if (PyStackRef_IsTaggedInt(ref)) {
+            continue;
+        }
+        if (op == PyStackRef_AsPyObjectBorrow(ref)) {
+            return PyStackRef_IsHeapSafe(ref);
         }
     }
     return 0;
@@ -2930,57 +3066,28 @@ finally:
 
 /* Trashcan support. */
 
-#ifndef Py_GIL_DISABLED
-/* We need to store a pointer in the refcount field of
- * an object. It is important that we never store 0 (NULL).
-* It is also important to not make the object appear immortal,
-* or it might be untracked by the cycle GC. */
-static uintptr_t
-pointer_to_safe_refcount(void *ptr)
-{
-    uintptr_t full = (uintptr_t)ptr;
-    assert((full & 3) == 0);
-#if SIZEOF_VOID_P > 4
-    uint32_t refcnt = (uint32_t)full;
-    if (refcnt >= (uint32_t)_Py_IMMORTAL_MINIMUM_REFCNT) {
-        full = full - ((uintptr_t)_Py_IMMORTAL_MINIMUM_REFCNT) + 1;
-    }
-    return full + 2;
-#else
-    // Make the top two bits 0, so it appears mortal.
-    return (full >> 2) + 1;
-#endif
-}
-
-static void *
-safe_refcount_to_pointer(uintptr_t refcnt)
-{
-#if SIZEOF_VOID_P > 4
-    if (refcnt & 1) {
-        refcnt += _Py_IMMORTAL_MINIMUM_REFCNT - 1;
-    }
-    return (void *)(refcnt - 2);
-#else
-    return (void *)((refcnt -1) << 2);
-#endif
-}
-#endif
-
 /* Add op to the gcstate->trash_delete_later list.  Called when the current
- * call-stack depth gets large.  op must be a currently untracked gc'ed
- * object, with refcount 0.  Py_DECREF must already have been called on it.
+ * call-stack depth gets large.  op must be a gc'ed object, with refcount 0.
+ *  Py_DECREF must already have been called on it.
  */
 void
 _PyTrash_thread_deposit_object(PyThreadState *tstate, PyObject *op)
 {
     _PyObject_ASSERT(op, Py_REFCNT(op) == 0);
+    PyTypeObject *tp = Py_TYPE(op);
+    assert(tp->tp_flags & Py_TPFLAGS_HAVE_GC);
+    int tracked = 0;
+    if (tp->tp_is_gc == NULL || tp->tp_is_gc(op)) {
+        tracked = _PyObject_GC_IS_TRACKED(op);
+        if (tracked) {
+            _PyObject_GC_UNTRACK(op);
+        }
+    }
+    uintptr_t tagged_ptr = ((uintptr_t)tstate->delete_later) | tracked;
 #ifdef Py_GIL_DISABLED
-    op->ob_tid = (uintptr_t)tstate->delete_later;
+    op->ob_tid = tagged_ptr;
 #else
-    /* Store the delete_later pointer in the refcnt field. */
-    uintptr_t refcnt = pointer_to_safe_refcount(tstate->delete_later);
-    *((uintptr_t*)op) = refcnt;
-    assert(!_Py_IsImmortal(op));
+    _Py_AS_GC(op)->_gc_next = tagged_ptr;
 #endif
     tstate->delete_later = op;
 }
@@ -2995,17 +3102,17 @@ _PyTrash_thread_destroy_chain(PyThreadState *tstate)
         destructor dealloc = Py_TYPE(op)->tp_dealloc;
 
 #ifdef Py_GIL_DISABLED
-        tstate->delete_later = (PyObject*) op->ob_tid;
+        uintptr_t tagged_ptr = op->ob_tid;
         op->ob_tid = 0;
         _Py_atomic_store_ssize_relaxed(&op->ob_ref_shared, _Py_REF_MERGED);
 #else
-        /* Get the delete_later pointer from the refcnt field.
-         * See _PyTrash_thread_deposit_object(). */
-        uintptr_t refcnt = *((uintptr_t*)op);
-        tstate->delete_later = safe_refcount_to_pointer(refcnt);
-        op->ob_refcnt = 0;
+        uintptr_t tagged_ptr = _Py_AS_GC(op)->_gc_next;
+        _Py_AS_GC(op)->_gc_next = 0;
 #endif
-
+        tstate->delete_later = (PyObject *)(tagged_ptr & ~1);
+        if (tagged_ptr & 1) {
+            _PyObject_GC_TRACK(op);
+        }
         /* Call the deallocator directly.  This used to try to
          * fool Py_DECREF into calling it indirectly, but
          * Py_DECREF was already called on this object, and in
@@ -3013,6 +3120,10 @@ _PyTrash_thread_destroy_chain(PyThreadState *tstate)
          * up distorting allocation statistics.
          */
         _PyObject_ASSERT(op, Py_REFCNT(op) == 0);
+#ifdef Py_TRACE_REFS
+        _Py_ForgetReference(op);
+#endif
+        _PyReftracerTrack(op, PyRefTracer_DESTROY);
         (*dealloc)(op);
     }
 }
@@ -3079,10 +3190,11 @@ void
 _Py_Dealloc(PyObject *op)
 {
     PyTypeObject *type = Py_TYPE(op);
+    unsigned long gc_flag = type->tp_flags & Py_TPFLAGS_HAVE_GC;
     destructor dealloc = type->tp_dealloc;
     PyThreadState *tstate = _PyThreadState_GET();
     intptr_t margin = _Py_RecursionLimit_GetMargin(tstate);
-    if (margin < 2) {
+    if (margin < 2 && gc_flag) {
         _PyTrash_thread_deposit_object(tstate, (PyObject *)op);
         return;
     }
@@ -3128,7 +3240,7 @@ _Py_Dealloc(PyObject *op)
     Py_XDECREF(old_exc);
     Py_DECREF(type);
 #endif
-    if (tstate->delete_later && margin >= 4) {
+    if (tstate->delete_later && margin >= 4 && gc_flag) {
         _PyTrash_thread_destroy_chain(tstate);
     }
 }

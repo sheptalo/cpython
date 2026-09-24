@@ -22,6 +22,12 @@ build applications which provide an interactive interpreter prompt.
    it defaults to a newly created dictionary with key ``'__name__'`` set to
    ``'__console__'`` and key ``'__doc__'`` set to ``None``.
 
+   Note that functions and classes objects created under an
+   :class:`!InteractiveInterpreter` instance will belong to the namespace
+   specified by *locals*.
+   They are only pickleable if *locals* is the namespace of an existing
+   module.
+
 
 .. class:: InteractiveConsole(locals=None, filename="<console>", local_exit=False)
 
@@ -86,7 +92,7 @@ Interactive Interpreter Objects
    *symbol* is ``'single'``.  One of several things can happen:
 
    * The input is incorrect; :func:`compile_command` raised an exception
-     (:exc:`SyntaxError` or :exc:`OverflowError`).  A syntax traceback will be
+     (usually :exc:`SyntaxError`).  A syntax traceback will be
      printed by calling the :meth:`showsyntaxerror` method.  :meth:`runsource`
      returns ``False``.
 

@@ -102,7 +102,7 @@ CPU-bound tasks, as only one thread can execute Python bytecode at a time.
 Despite this, threads remain a useful tool for achieving concurrency in many
 scenarios.
 
-As of Python 3.13, experimental :term:`free-threaded <free threading>` builds
+As of Python 3.13, :term:`free-threaded <free threading>` builds
 can disable the GIL, enabling true parallel execution of threads, but this
 feature is not available by default (see :pep:`703`).
 
@@ -512,7 +512,7 @@ since it is impossible to detect the termination of alien threads.
    This constructor should always be called with keyword arguments.  Arguments
    are:
 
-   *group* should be ``None``; reserved for future extension when a
+   *group* must be ``None`` as it is reserved for future extension when a
    :class:`!ThreadGroup` class is implemented.
 
    *target* is the callable object to be invoked by the :meth:`run` method.
@@ -621,7 +621,7 @@ since it is impossible to detect the termination of alien threads.
       an error to :meth:`~Thread.join` a thread before it has been started
       and attempts to do so raise the same exception.
 
-      If an attempt is made to join a running daemonic thread in in late stages
+      If an attempt is made to join a running daemonic thread in late stages
       of :term:`Python finalization <interpreter shutdown>` :meth:`!join`
       raises a :exc:`PythonFinalizationError`.
 

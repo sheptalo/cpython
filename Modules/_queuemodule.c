@@ -7,6 +7,7 @@
 #include "pycore_moduleobject.h"  // _PyModule_GetState()
 #include "pycore_parking_lot.h"
 #include "pycore_time.h"          // _PyTime_FromSecondsObject()
+#include "pycore_weakref.h"       // FT_CLEAR_WEAKREFS()
 
 #include <stdbool.h>
 #include <stddef.h>               // offsetof()
@@ -164,6 +165,7 @@ RingBuf_Put(RingBuf *buf, PyObject *item)
         // Buffer is full, grow it.
         if (resize_ringbuf(buf, buf->items_cap * 2) < 0) {
             PyErr_NoMemory();
+            Py_DECREF(item);
             return -1;
         }
     }
@@ -221,9 +223,7 @@ simplequeue_dealloc(PyObject *op)
 
     PyObject_GC_UnTrack(self);
     (void)simplequeue_clear(op);
-    if (self->weakreflist != NULL) {
-        PyObject_ClearWeakRefs(op);
-    }
+    FT_CLEAR_WEAKREFS(op, self->weakreflist);
     tp->tp_free(self);
     Py_DECREF(tp);
 }
@@ -297,15 +297,16 @@ _queue.SimpleQueue.put
 
 Put the item on the queue.
 
-The optional 'block' and 'timeout' arguments are ignored, as this method
-never blocks.  They are provided for compatibility with the Queue class.
+The optional 'block' and 'timeout' arguments are ignored, as this
+method never blocks.  They are provided for compatibility with the
+Queue class.
 
 [clinic start generated code]*/
 
 static PyObject *
 _queue_SimpleQueue_put_impl(simplequeueobject *self, PyObject *item,
                             int block, PyObject *timeout)
-/*[clinic end generated code: output=4333136e88f90d8b input=a16dbb33363c0fa8]*/
+/*[clinic end generated code: output=4333136e88f90d8b input=9f9ff270a74670c3]*/
 {
     HandoffData data = {
         .handed_off = 0,
@@ -365,10 +366,11 @@ _queue.SimpleQueue.get
 
 Remove and return an item from the queue.
 
-If optional args 'block' is true and 'timeout' is None (the default),
-block if necessary until an item is available. If 'timeout' is
-a non-negative number, it blocks at most 'timeout' seconds and raises
-the Empty exception if no item was available within that time.
+If optional args 'block' is true and 'timeout' is None (the
+default), block if necessary until an item is available.  If
+'timeout' is a non-negative number, it blocks at most 'timeout'
+seconds and raises the Empty exception if no item was available
+within that time.
 Otherwise ('block' is false), return an item if one is immediately
 available, else raise the Empty exception ('timeout' is ignored
 in that case).
@@ -378,7 +380,7 @@ in that case).
 static PyObject *
 _queue_SimpleQueue_get_impl(simplequeueobject *self, PyTypeObject *cls,
                             int block, PyObject *timeout_obj)
-/*[clinic end generated code: output=5c2cca914cd1e55b input=f7836c65e5839c51]*/
+/*[clinic end generated code: output=5c2cca914cd1e55b input=afa0889bbc6b4761]*/
 {
     PyTime_t endtime = 0;
 
@@ -536,7 +538,7 @@ static PyMethodDef simplequeue_methods[] = {
     _QUEUE_SIMPLEQUEUE_PUT_NOWAIT_METHODDEF
     _QUEUE_SIMPLEQUEUE_QSIZE_METHODDEF
     {"__class_getitem__",    Py_GenericAlias,
-    METH_O|METH_CLASS,       PyDoc_STR("See PEP 585")},
+    METH_O|METH_CLASS,       PyDoc_STR("SimpleQueues are generic over the type of their contents")},
     {NULL,           NULL}              /* sentinel */
 };
 

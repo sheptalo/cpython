@@ -1,5 +1,5 @@
-#ifndef Py_REFCOUNT_H
-#define Py_REFCOUNT_H
+#ifndef _Py_REFCOUNT_H
+#define _Py_REFCOUNT_H
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -33,7 +33,7 @@ increase and decrease the objects reference count.
 
 In order to offer sufficient resilience to C extensions using the stable ABI
 compiled against 3.11 or earlier, we set the initial value near the
-middle of the range (2**31, 2**32). That way the the refcount can be
+middle of the range (2**31, 2**32). That way the refcount can be
 off by ~1 billion without affecting immortality.
 
 Reference count increases will use saturated arithmetic, taking advantage of
@@ -117,6 +117,8 @@ PyAPI_FUNC(Py_ssize_t) Py_REFCNT(PyObject *ob);
     }
     #if !defined(Py_LIMITED_API) || Py_LIMITED_API+0 < 0x030b0000
     #  define Py_REFCNT(ob) _Py_REFCNT(_PyObject_CAST(ob))
+    #else
+    #  define Py_REFCNT(ob) _Py_REFCNT(ob)
     #endif
 #endif
 
@@ -246,20 +248,6 @@ PyAPI_FUNC(void) Py_DecRef(PyObject *);
 // Private functions used by Py_INCREF() and Py_DECREF().
 PyAPI_FUNC(void) _Py_IncRef(PyObject *);
 PyAPI_FUNC(void) _Py_DecRef(PyObject *);
-
-#ifndef Py_GIL_DISABLED
-static inline Py_ALWAYS_INLINE void Py_INCREF_MORTAL(PyObject *op)
-{
-    assert(!_Py_IsStaticImmortal(op));
-    op->ob_refcnt++;
-    _Py_INCREF_STAT_INC();
-#if defined(Py_REF_DEBUG) && !defined(Py_LIMITED_API)
-    if (!_Py_IsImmortal(op)) {
-        _Py_INCREF_IncRefTotal();
-    }
-#endif
-}
-#endif
 
 static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
 {
@@ -490,7 +478,7 @@ static inline Py_ALWAYS_INLINE void Py_DECREF(PyObject *op)
     do { \
         _Py_TYPEOF(op)* _tmp_op_ptr = &(op); \
         _Py_TYPEOF(op) _tmp_old_op = (*_tmp_op_ptr); \
-        if (_tmp_old_op != NULL) { \
+        if (_tmp_old_op != _Py_NULL) { \
             *_tmp_op_ptr = _Py_NULL; \
             Py_DECREF(_tmp_old_op); \
         } \
@@ -500,7 +488,7 @@ static inline Py_ALWAYS_INLINE void Py_DECREF(PyObject *op)
     do { \
         PyObject **_tmp_op_ptr = _Py_CAST(PyObject**, &(op)); \
         PyObject *_tmp_old_op = (*_tmp_op_ptr); \
-        if (_tmp_old_op != NULL) { \
+        if (_tmp_old_op != _Py_NULL) { \
             PyObject *_null_ptr = _Py_NULL; \
             memcpy(_tmp_op_ptr, &_null_ptr, sizeof(PyObject*)); \
             Py_DECREF(_tmp_old_op); \
@@ -564,4 +552,4 @@ static inline PyObject* _Py_XNewRef(PyObject *obj)
 #ifdef __cplusplus
 }
 #endif
-#endif   // !Py_REFCOUNT_H
+#endif   // !_Py_REFCOUNT_H

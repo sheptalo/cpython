@@ -515,7 +515,7 @@ always available. Unless explicitly noted otherwise, all variables are read-only
    in the range 0--127, and produce undefined results otherwise.  Some systems
    have a convention for assigning specific meanings to specific exit codes, but
    these are generally underdeveloped; Unix programs generally use 2 for command
-   line syntax errors and 1 for all other kind of errors.  If another type of
+   line syntax errors and 1 for all other kinds of errors.  If another type of
    object is passed, ``None`` is equivalent to passing zero, and any other
    object is printed to :data:`stderr` and results in an exit code of 1.  In
    particular, ``sys.exit("some error message")`` is a quick way to exit a
@@ -953,6 +953,8 @@ always available. Unless explicitly noted otherwise, all variables are read-only
       This function should be used for internal and specialized purposes only.
       It is not guaranteed to exist in all implementations of Python.
 
+   .. versionadded:: 3.12
+
 
 .. function:: getobjects(limit[, type])
 
@@ -1128,10 +1130,14 @@ always available. Unless explicitly noted otherwise, all variables are read-only
 
       The size of the seed key of the hash algorithm
 
+   .. attribute:: hash_info.cutoff
+
+      Cutoff for small string DJBX33A optimization in range ``[1, cutoff)``.
+
    .. versionadded:: 3.2
 
    .. versionchanged:: 3.4
-      Added *algorithm*, *hash_bits* and *seed_bits*
+      Added *algorithm*, *hash_bits*, *seed_bits*, and *cutoff*.
 
 
 .. data:: hexversion
@@ -1185,6 +1191,15 @@ always available. Unless explicitly noted otherwise, all variables are read-only
    ``cache_tag`` is set to ``None``, it indicates that module caching should
    be disabled.
 
+   *supports_isolated_interpreters* is a boolean value, whether
+   this implementation supports multiple isolated interpreters.
+   It is ``True`` for CPython on most platforms.  Platforms with
+   this support implement the low-level :mod:`!_interpreters` module.
+
+   .. seealso::
+
+      :pep:`684`, :pep:`734`, and :mod:`concurrent.interpreters`.
+
    :data:`sys.implementation` may contain additional attributes specific to
    the Python implementation.  These non-standard attributes must start with
    an underscore, and are not described here.  Regardless of its contents,
@@ -1193,6 +1208,9 @@ always available. Unless explicitly noted otherwise, all variables are read-only
    language versions, however.)  See :pep:`421` for more information.
 
    .. versionadded:: 3.3
+
+   .. versionchanged:: 3.14
+      Added ``supports_isolated_interpreters`` field.
 
    .. note::
 
@@ -1750,7 +1768,7 @@ always available. Unless explicitly noted otherwise, all variables are read-only
    :func:`settrace` for each thread being debugged or use :func:`threading.settrace`.
 
    Trace functions should have three arguments: *frame*, *event*, and
-   *arg*. *frame* is the current stack frame.  *event* is a string: ``'call'``,
+   *arg*. *frame* is the :ref:`current stack frame <frame-objects>`. *event* is a string: ``'call'``,
    ``'line'``, ``'return'``, ``'exception'`` or ``'opcode'``.  *arg* depends on
    the event type.
 
@@ -1780,7 +1798,7 @@ always available. Unless explicitly noted otherwise, all variables are read-only
       The interpreter is about to execute a new line of code or re-execute the
       condition of a loop.  The local trace function is called; *arg* is
       ``None``; the return value specifies the new local trace function.  See
-      :file:`Objects/lnotab_notes.txt` for a detailed explanation of how this
+      :source:`InternalDocs/code_objects.md` for a detailed explanation of how this
       works.
       Per-line events may be disabled for a frame by setting
       :attr:`~frame.f_trace_lines` to :const:`False` on that
@@ -1933,8 +1951,28 @@ always available. Unless explicitly noted otherwise, all variables are read-only
    interpreter is pre-release (alpha, beta, or release candidate) then the
    local and remote interpreters must be the same exact version.
 
+   See :ref:`remote-debugging` for more information about the remote debugging
+   mechanism.
+
+   .. audit-event:: sys.remote_exec pid script_path
+
+      When the code is executed in the remote process, an
+      :ref:`auditing event <auditing>` ``sys.remote_exec`` is raised with
+      the *pid* and the path to the script file.
+      This event is raised in the process that called :func:`sys.remote_exec`.
+
+   .. audit-event:: cpython.remote_debugger_script script_path
+
+      When the script is executed in the remote process, an
+      :ref:`auditing event <auditing>`
+      ``cpython.remote_debugger_script`` is raised
+      with the path in the remote process.
+      This event is raised in the remote process, not the one
+      that called :func:`sys.remote_exec`.
+
    .. availability:: Unix, Windows.
    .. versionadded:: 3.14
+      See :pep:`768` for more details.
 
 
 .. function:: _enablelegacywindowsfsencoding()
@@ -1979,7 +2017,7 @@ always available. Unless explicitly noted otherwise, all variables are read-only
    returned by the :func:`open` function.  Their parameters are chosen as
    follows:
 
-   * The encoding and error handling are is initialized from
+   * The encoding and error handling are initialized from
      :c:member:`PyConfig.stdio_encoding` and :c:member:`PyConfig.stdio_errors`.
 
      On Windows, UTF-8 is used for the console device.  Non-character
@@ -2161,8 +2199,11 @@ always available. Unless explicitly noted otherwise, all variables are read-only
 
 .. data:: api_version
 
-   The C API version for this interpreter.  Programmers may find this useful when
-   debugging version conflicts between Python and extension modules.
+   The C API version, equivalent to the C macro :c:macro:`PYTHON_API_VERSION`.
+   Defined for backwards compatibility.
+
+   Currently, this constant is not updated in new Python versions, and is not
+   useful for versioning. This may change in the future.
 
 
 .. data:: version_info
@@ -2189,7 +2230,7 @@ always available. Unless explicitly noted otherwise, all variables are read-only
 
    The version number used to form registry keys on Windows platforms. This is
    stored as string resource 1000 in the Python DLL.  The value is normally the
-   major and minor versions of the running Python interpreter.  It is provided in the :mod:`sys`
+   major and minor versions of the running Python interpreter.  It is provided in the :mod:`!sys`
    module for informational purposes; modifying this value has no effect on the
    registry keys used by Python.
 

@@ -118,28 +118,30 @@ class CProfileTest(ProfileTest):
         pr = self.profilerclass()
         pr2 = self.profilerclass()
         pr.enable()
-        self.assertRaises(ValueError, pr2.enable)
-        pr.disable()
+        self.addCleanup(pr.disable)
+        msg = f"tool {sys.monitoring.PROFILER_ID} is already in use"
+        self.assertRaisesRegex(ValueError, msg, pr2.enable)
 
     def test_throw(self):
         """
         gh-106152
         generator.throw() should trigger a call in cProfile
-        In the any() call below, there should be two entries for the generator:
-            * one for the call to __next__ which gets a True and terminates any
-            * one when the generator is garbage collected which will effectively
-              do a throw.
         """
+
+        def gen():
+            yield
+
         pr = self.profilerclass()
         pr.enable()
-        any(a == 1 for a in (1, 2))
+        g = gen()
+        try:
+            g.throw(SyntaxError)
+        except SyntaxError:
+            pass
         pr.disable()
         pr.create_stats()
 
-        for func, (cc, nc, _, _, _) in pr.stats.items():
-            if func[2] == "<genexpr>":
-                self.assertEqual(cc, 1)
-                self.assertEqual(nc, 1)
+        self.assertTrue(any("throw" in func[2] for func in pr.stats.keys())),
 
     def test_bad_descriptor(self):
         # gh-132250

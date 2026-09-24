@@ -69,10 +69,6 @@ jit_alloc(size_t size)
 #else
     int flags = MAP_ANONYMOUS | MAP_PRIVATE;
     int prot = PROT_READ | PROT_WRITE;
-# ifdef MAP_JIT
-    flags |= MAP_JIT;
-    prot |= PROT_EXEC;
-# endif
     unsigned char *memory = mmap(NULL, size, prot, flags, -1, 0);
     int failed = memory == MAP_FAILED;
 #endif
@@ -118,11 +114,8 @@ mark_executable(unsigned char *memory, size_t size)
     int old;
     int failed = !VirtualProtect(memory, size, PAGE_EXECUTE_READ, &old);
 #else
-    int failed = 0;
     __builtin___clear_cache((char *)memory, (char *)memory + size);
-#ifndef MAP_JIT
-    failed = mprotect(memory, size, PROT_EXEC | PROT_READ);
-#endif
+    int failed = mprotect(memory, size, PROT_EXEC | PROT_READ);
 #endif
     if (failed) {
         jit_error("unable to protect executable memory");
@@ -255,18 +248,6 @@ patch_aarch64_12(unsigned char *location, uint64_t value)
     set_bits(loc32, 10, value, shift, 12);
 }
 
-// Relaxable 12-bit low part of an absolute address. Pairs nicely with
-// patch_aarch64_21rx (below).
-void
-patch_aarch64_12x(unsigned char *location, uint64_t value)
-{
-    // This can *only* be relaxed if it occurs immediately before a matching
-    // patch_aarch64_21rx. If that happens, the JIT build step will replace both
-    // calls with a single call to patch_aarch64_33rx. Otherwise, we end up
-    // here, and the instruction is patched normally:
-    patch_aarch64_12(location, value);
-}
-
 // 16-bit low part of an absolute address.
 void
 patch_aarch64_16a(unsigned char *location, uint64_t value)
@@ -327,18 +308,6 @@ patch_aarch64_21r(unsigned char *location, uint64_t value)
     set_bits(loc32, 5, value, 2, 19);
 }
 
-// Relaxable 21-bit count of pages between this page and an absolute address's
-// page. Pairs nicely with patch_aarch64_12x (above).
-void
-patch_aarch64_21rx(unsigned char *location, uint64_t value)
-{
-    // This can *only* be relaxed if it occurs immediately before a matching
-    // patch_aarch64_12x. If that happens, the JIT build step will replace both
-    // calls with a single call to patch_aarch64_33rx. Otherwise, we end up
-    // here, and the instruction is patched normally:
-    patch_aarch64_21r(location, value);
-}
-
 // 28-bit relative branch.
 void
 patch_aarch64_26r(unsigned char *location, uint64_t value)
@@ -352,46 +321,6 @@ patch_aarch64_26r(unsigned char *location, uint64_t value)
     // Since instructions are 4-byte aligned, only use 26 bits:
     assert(get_bits(value, 0, 2) == 0);
     set_bits(loc32, 0, value, 2, 26);
-}
-
-// A pair of patch_aarch64_21rx and patch_aarch64_12x.
-void
-patch_aarch64_33rx(unsigned char *location, uint64_t value)
-{
-    uint32_t *loc32 = (uint32_t *)location;
-    // Try to relax the pair of GOT loads into an immediate value:
-    assert(IS_AARCH64_ADRP(*loc32));
-    unsigned char reg = get_bits(loc32[0], 0, 5);
-    assert(IS_AARCH64_LDR_OR_STR(loc32[1]));
-    // There should be only one register involved:
-    assert(reg == get_bits(loc32[1], 0, 5));  // ldr's output register.
-    assert(reg == get_bits(loc32[1], 5, 5));  // ldr's input register.
-    uint64_t relaxed = *(uint64_t *)value;
-    if (relaxed < (1UL << 16)) {
-        // adrp reg, AAA; ldr reg, [reg + BBB] -> movz reg, XXX; nop
-        loc32[0] = 0xD2800000 | (get_bits(relaxed, 0, 16) << 5) | reg;
-        loc32[1] = 0xD503201F;
-        return;
-    }
-    if (relaxed < (1ULL << 32)) {
-        // adrp reg, AAA; ldr reg, [reg + BBB] -> movz reg, XXX; movk reg, YYY
-        loc32[0] = 0xD2800000 | (get_bits(relaxed,  0, 16) << 5) | reg;
-        loc32[1] = 0xF2A00000 | (get_bits(relaxed, 16, 16) << 5) | reg;
-        return;
-    }
-    relaxed = value - (uintptr_t)location;
-    if ((relaxed & 0x3) == 0 &&
-        (int64_t)relaxed >= -(1L << 19) &&
-        (int64_t)relaxed < (1L << 19))
-    {
-        // adrp reg, AAA; ldr reg, [reg + BBB] -> ldr reg, XXX; nop
-        loc32[0] = 0x58000000 | (get_bits(relaxed, 2, 19) << 5) | reg;
-        loc32[1] = 0xD503201F;
-        return;
-    }
-    // Couldn't do it. Just patch the two instructions normally:
-    patch_aarch64_21rx(location, value);
-    patch_aarch64_12x(location + 4, value);
 }
 
 // Relaxable 32-bit relative address.
@@ -528,9 +457,6 @@ _PyJIT_Compile(_PyExecutorObject *executor, const _PyUOpInstruction trace[], siz
     if (memory == NULL) {
         return -1;
     }
-#ifdef MAP_JIT
-    pthread_jit_write_protect_np(0);
-#endif
     // Collect memory stats
     OPT_STAT_ADD(jit_total_memory_size, total_size);
     OPT_STAT_ADD(jit_code_size, code_size);
@@ -568,9 +494,6 @@ _PyJIT_Compile(_PyExecutorObject *executor, const _PyUOpInstruction trace[], siz
     data += group->data_size;
     assert(code == memory + code_size);
     assert(data == memory + code_size + state.trampolines.size + data_size);
-#ifdef MAP_JIT
-    pthread_jit_write_protect_np(1);
-#endif
     if (mark_executable(memory, total_size)) {
         jit_free(memory, total_size);
         return -1;

@@ -20,6 +20,7 @@ ANSI_ESCAPE_SEQUENCE = re.compile(r"\x1b\[[ -@]*[A-~]")
 ZERO_WIDTH_BRACKET = re.compile(r"\x01.*?\x02")
 ZERO_WIDTH_TRANS = str.maketrans({"\x01": "", "\x02": ""})
 IDENTIFIERS_AFTER = {"def", "class"}
+KEYWORD_CONSTANTS = {"True", "False", "None"}
 BUILTINS = {str(name) for name in dir(builtins) if not name.startswith('_')}
 
 
@@ -41,9 +42,15 @@ class Span(NamedTuple):
 
     @classmethod
     def from_token(cls, token: TI, line_len: list[int]) -> Self:
+        end_offset = -1
+        if (token.type in {T.FSTRING_MIDDLE, T.TSTRING_MIDDLE}
+            and token.string.endswith(("{", "}"))):
+            # gh-134158: a visible trailing brace comes from a double brace in input
+            end_offset += 1
+
         return cls(
             line_len[token.start[0] - 1] + token.start[1],
-            line_len[token.end[0] - 1] + token.end[1] - 1,
+            line_len[token.end[0] - 1] + token.end[1] + end_offset,
         )
 
 
@@ -56,6 +63,12 @@ class ColorSpan(NamedTuple):
 def str_width(c: str) -> int:
     if ord(c) < 128:
         return 1
+    # gh-139246 for zero-width joiner and combining characters
+    if unicodedata.combining(c):
+        return 0
+    category = unicodedata.category(c)
+    if category == "Cf" and c != "\u00ad":
+        return 0
     w = unicodedata.east_asian_width(c)
     if w in ("N", "Na", "H", "A"):
         return 1
@@ -191,20 +204,38 @@ def gen_colors_from_token_stream(
                     span = Span.from_token(token, line_lengths)
                     yield ColorSpan(span, "definition")
                 elif keyword.iskeyword(token.string):
+                    kw = keyword.kwaliases.get(token.string, token.string)
+                    span_cls = "keyword"
+                    if kw in KEYWORD_CONSTANTS:
+                        span_cls = "keyword_constant"
                     span = Span.from_token(token, line_lengths)
-                    yield ColorSpan(span, "keyword")
-                    if token.string in IDENTIFIERS_AFTER:
+                    yield ColorSpan(span, span_cls)
+                    if kw in IDENTIFIERS_AFTER:
                         is_def_name = True
                 elif (
                     keyword.issoftkeyword(token.string)
                     and bracket_level == 0
-                    and is_soft_keyword_used(prev_token, token, next_token)
+                    and is_soft_keyword_used(
+                        *map(unalias, (prev_token, token, next_token))
+                    )
                 ):
                     span = Span.from_token(token, line_lengths)
                     yield ColorSpan(span, "soft_keyword")
-                elif token.string in BUILTINS:
+                elif (
+                    token.string in BUILTINS
+                    and not (prev_token and prev_token.exact_type == T.DOT)
+                ):
                     span = Span.from_token(token, line_lengths)
                     yield ColorSpan(span, "builtin")
+
+
+def unalias(token: TI | None) -> TI | None:
+    """Return the token spelled as the keyword it is an alias of, if any."""
+    if token is not None and token.type == T.NAME:
+        kw = keyword.kwaliases.get(token.string)
+        if kw is not None:
+            return token._replace(string=kw)
+    return token
 
 
 keyword_first_sets_match = {"False", "None", "True", "await", "lambda", "not"}
@@ -223,7 +254,7 @@ def is_soft_keyword_used(*tokens: TI | None) -> bool:
             None | TI(T.NEWLINE) | TI(T.INDENT) | TI(string=":"),
             TI(string="match"),
             TI(T.NUMBER | T.STRING | T.FSTRING_START | T.TSTRING_START)
-            | TI(T.OP, string="(" | "*" | "[" | "{" | "~" | "...")
+            | TI(T.OP, string="(" | "*" | "-" | "+" | "[" | "{" | "~" | "...")
         ):
             return True
         case (
@@ -235,14 +266,14 @@ def is_soft_keyword_used(*tokens: TI | None) -> bool:
                 return s in keyword_first_sets_match
             return True
         case (
-            None | TI(T.NEWLINE) | TI(T.INDENT) | TI(string=":"),
+            None | TI(T.NEWLINE) | TI(T.INDENT) | TI(T.DEDENT) | TI(string=":"),
             TI(string="case"),
             TI(T.NUMBER | T.STRING | T.FSTRING_START | T.TSTRING_START)
             | TI(T.OP, string="(" | "*" | "-" | "[" | "{")
         ):
             return True
         case (
-            None | TI(T.NEWLINE) | TI(T.INDENT) | TI(string=":"),
+            None | TI(T.NEWLINE) | TI(T.INDENT) | TI(T.DEDENT) | TI(string=":"),
             TI(string="case"),
             TI(T.NAME, string=s)
         ):
@@ -251,6 +282,12 @@ def is_soft_keyword_used(*tokens: TI | None) -> bool:
             return True
         case (TI(string="case"), TI(string="_"), TI(string=":")):
             return True
+        case (
+            None | TI(T.NEWLINE) | TI(T.INDENT) | TI(T.DEDENT) | TI(string=":"),
+            TI(string="type"),
+            TI(T.NAME, string=s)
+        ):
+            return not keyword.iskeyword(s)
         case _:
             return False
 

@@ -382,6 +382,13 @@ SyntaxError: invalid syntax
 Traceback (most recent call last):
 SyntaxError: invalid syntax
 
+# But prefixes of soft keywords should
+# still raise specialized errors
+
+>>> (mat x)
+Traceback (most recent call last):
+SyntaxError: invalid syntax. Perhaps you forgot a comma?
+
 From compiler_complex_args():
 
 >>> def f(None=1):
@@ -1431,6 +1438,23 @@ Better error message for using `except as` with not a name:
    Traceback (most recent call last):
    SyntaxError: cannot use except* statement with literal
 
+Regression tests for gh-133999:
+
+   >>> try: pass
+   ... except TypeError as name: raise from None
+   Traceback (most recent call last):
+   SyntaxError: invalid syntax
+
+   >>> try: pass
+   ... except* TypeError as name: raise from None
+   Traceback (most recent call last):
+   SyntaxError: invalid syntax
+
+   >>> match 1:
+   ...     case 1 | 2 as abc: raise from None
+   Traceback (most recent call last):
+   SyntaxError: invalid syntax
+
 Ensure that early = are not matched by the parser as invalid comparisons
    >>> f(2, 4, x=34); 1 $ 2
    Traceback (most recent call last):
@@ -2086,6 +2110,25 @@ SyntaxError: cannot use subscript as import target
 >>> from a import с as d[e], b
 Traceback (most recent call last):
 SyntaxError: cannot use subscript as import target
+
+# Check that we don't raise a "cannot use name as import target" error
+# if there is an error in an unrelated statement after ';'
+
+>>> import a as b; None = 1
+Traceback (most recent call last):
+SyntaxError: cannot assign to None
+
+>>> import a, b as c; d = 1; None = 1
+Traceback (most recent call last):
+SyntaxError: cannot assign to None
+
+>>> from a import b as c; None = 1
+Traceback (most recent call last):
+SyntaxError: cannot assign to None
+
+>>> from a import b, c as d; e = 1; None = 1
+Traceback (most recent call last):
+SyntaxError: cannot assign to None
 
 # Check that we dont raise the "trailing comma" error if there is more
 # input to the left of the valid part that we parsed.
@@ -3181,6 +3224,21 @@ while 1:
                       break
 """
         self._check_error(source, "too many statically nested blocks")
+
+    @support.cpython_only
+    def test_nested_inlined_comprehensions_block_limit(self):
+        # Each inlined comprehension with locals emits SETUP_FINALLY, which
+        # must count toward CO_MAXBLOCKS (gh-156091).
+        def src(depth):
+            e = "i for i in r"
+            for _ in range(depth - 1):
+                e = "[" + e + "] for i in r"
+            return "x = [" + e + "]"
+
+        CO_MAXBLOCKS = 21
+        compile(src(CO_MAXBLOCKS), "<testcase>", "exec")
+        self._check_error(src(CO_MAXBLOCKS + 1),
+                          "too many statically nested blocks")
 
     @support.cpython_only
     def test_error_on_parser_stack_overflow(self):

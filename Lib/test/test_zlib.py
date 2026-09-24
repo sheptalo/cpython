@@ -611,6 +611,20 @@ class CompressObjectTestCase(BaseCompressTestCase, unittest.TestCase):
         dco.flush()
         self.assertFalse(dco.eof)
 
+    def test_decompress_flush_corrupt_stream(self):
+        x = b'x\x9cK\xcb\xcf\x07\x00\x02\x82\x01E'  # 'foo'
+        corrupt = x[:-1] + b'\x00'
+        dco = zlib.decompressobj()
+        self.assertEqual(dco.decompress(corrupt, 1), b'f')
+        self.assertRaises(zlib.error, dco.flush)
+
+    def test_decompress_flush_twice(self):
+        x = b'x\x9cK\xcb\xcf\x07\x00\x02\x82\x01E'  # 'foo'
+        dco = zlib.decompressobj()
+        self.assertEqual(dco.decompress(x), b'foo')
+        self.assertEqual(dco.flush(), b'')
+        self.assertEqual(dco.flush(), b'')
+
     def test_decompress_unused_data(self):
         # Repeated calls to decompress() after EOF should accumulate data in
         # dco.unused_data, instead of just storing the arg to the last call.
@@ -982,7 +996,7 @@ class ZlibDecompressorTest(unittest.TestCase):
         self.assertRaises(EOFError, zlibd.decompress, b"")
 
     @support.skip_if_pgo_task
-    @bigmemtest(size=_4G + 100, memuse=3.3)
+    @bigmemtest(size=_4G + 100, memuse=4.5)
     def testDecompress4G(self, size):
         # "Test zlib._ZlibDecompressor.decompress() with >4GiB input"
         blocksize = min(10 * 1024 * 1024, size)

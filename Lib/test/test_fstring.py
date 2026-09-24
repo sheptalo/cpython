@@ -14,11 +14,13 @@ import os
 import re
 import types
 import decimal
+import subprocess
 import unittest
 import warnings
 from test import support
 from test.support.os_helper import temp_cwd
-from test.support.script_helper import assert_python_failure, assert_python_ok
+from test.support.script_helper import (
+    assert_python_failure, assert_python_ok, spawn_python)
 
 a_global = 'global variable'
 
@@ -593,6 +595,17 @@ x = (
                              r"""b'' f''""",
                              ])
 
+    def test_concat_decode_failure_does_not_crash(self):
+        script = r'''
+import builtins
+builtins.__import__ = builtins  # Breaks warning machinery so _get_resized_exprs returns NULL
+try:
+    compile('"x"f"\]"b""', '<test>', 'exec')
+except Exception:
+    pass
+'''
+        assert_python_ok('-c', script)
+
     def test_literal(self):
         self.assertEqual(f'', '')
         self.assertEqual(f'a', 'a')
@@ -810,6 +823,18 @@ x = (
         # Test lots of expressions and constants, concatenated.
         s = "f'{1}' 'x' 'y'" * 1024
         self.assertEqual(eval(s), '1xy' * 1024)
+
+    @support.requires_resource('cpu')
+    def test_many_fstrings_in_module(self):
+        fields = ''.join(f'{{x{i}}}' for i in range(100))
+        source = ''.join(
+            f"value_{i} = f'{fields}'\n" for i in range(1_000)
+        )
+        namespace = {f'x{i}': str(i) for i in range(100)}
+        expected = ''.join(str(i) for i in range(100))
+        exec(source, namespace)
+        self.assertEqual(namespace['value_0'], expected)
+        self.assertEqual(namespace['value_999'], expected)
 
     def test_format_specifier_expressions(self):
         width = 10
@@ -1327,6 +1352,9 @@ x = (
         self.assertEqual(f'{3!=4:}', 'True')
         self.assertEqual(f'{3!=4!s}', 'True')
         self.assertEqual(f'{3!=4!s:.3}', 'Tru')
+        a = 3
+        b = 4
+        self.assertEqual(f'{a!=b=:>10}', 'a!=b=         1')
 
     def test_equal_equal(self):
         # Because an expression ending in = has special meaning,
@@ -1336,9 +1364,9 @@ x = (
 
     def test_conversions(self):
         self.assertEqual(f'{3.14:10.10}', '      3.14')
-        self.assertEqual(f'{3.14!s:10.10}', '3.14      ')
-        self.assertEqual(f'{3.14!r:10.10}', '3.14      ')
-        self.assertEqual(f'{3.14!a:10.10}', '3.14      ')
+        self.assertEqual(f'{1.25!s:10.10}', '1.25      ')
+        self.assertEqual(f'{1.25!r:10.10}', '1.25      ')
+        self.assertEqual(f'{1.25!a:10.10}', '1.25      ')
 
         self.assertEqual(f'{"a"}', 'a')
         self.assertEqual(f'{"a"!r}', "'a'")
@@ -1347,7 +1375,7 @@ x = (
         # Conversions can have trailing whitespace after them since it
         # does not provide any significance
         self.assertEqual(f"{3!s  }", "3")
-        self.assertEqual(f'{3.14!s  :10.10}', '3.14      ')
+        self.assertEqual(f'{1.25!s  :10.10}', '1.25      ')
 
         # Not a conversion.
         self.assertEqual(f'{"a!r"}', "a!r")
@@ -1380,7 +1408,7 @@ x = (
         for conv in ' s', ' s ':
             self.assertAllRaise(SyntaxError,
                                 "f-string: conversion type must come right after the"
-                                " exclamanation mark",
+                                " exclamation mark",
                                 ["f'{3!" + conv + "}'"])
 
         self.assertAllRaise(SyntaxError,
@@ -1651,6 +1679,26 @@ x = (
         self.assertEqual(f"{1+2 = # my comment
   }", '1+2 = \n  3')
 
+        self.assertEqual(f'{""" # booo
+  """=}', '""" # booo\n  """=\' # booo\\n  \'')
+
+        self.assertEqual(f'{" # nooo "=}', '" # nooo "=\' # nooo \'')
+        self.assertEqual(f'{" \" # nooo \" "=}', '" \\" # nooo \\" "=\' " # nooo " \'')
+
+        result = f'''{(
+            1,  # Force lexer metadata reconstruction.
+            "\"#")=}'''
+        self.assertEqual(
+            result,
+            '(\n            1,  \n            "\\"#")=(1, \'"#\')',
+        )
+
+        self.assertEqual(f'{ # some comment goes here
+  """hello"""=}',  ' \n  """hello"""=\'hello\'')
+        self.assertEqual(f'{"""# this is not a comment
+        a""" # this is a comment
+        }', '# this is not a comment\n        a')
+
         # These next lines contains tabs.  Backslash escapes don't
         # work in f-strings.
         # patchcheck doesn't like these tabs.  So the only way to test
@@ -1758,6 +1806,32 @@ print(f'''{{
         self.assertEqual(stdout.decode('utf-8').strip().replace('\r\n', '\n').replace('\r', '\n'),
                          "3\n=3")
 
+    @support.requires_subprocess()
+    def test_expression_in_interactive_after_buffer_resize(self):
+        expression = "(\n" + (" " * 64 + "\n") * 256 + "1\n)"
+        source = (
+            f"result = f'''{{{expression}=}}'''\n"
+            "print(repr(result))\n"
+        )
+        with spawn_python('-i', '-q', stderr=subprocess.PIPE) as process:
+            stdout, stderr = process.communicate(
+                source.encode(), timeout=support.SHORT_TIMEOUT)
+        self.assertEqual(process.returncode, 0, stderr)
+        self.assertEqual(stdout.decode().strip(), repr(expression + "=1"))
+
+    def test_debug_in_file_after_buffer_resize(self):
+        expression = "(\n" + (" " * 64 + "\n") * 256 + "1\n)"
+        expected = expression + "=1"
+        with temp_cwd():
+            script = 'script.py'
+            source = (
+                f"result = f'''{{{expression}=}}'''\n"
+                f"assert result == {expected!r}\n"
+            )
+            with open(script, 'w') as f:
+                f.write(source)
+            assert_python_ok(script)
+
     def test_syntax_warning_infinite_recursion_in_file(self):
         with temp_cwd():
             script = 'script.py'
@@ -1818,6 +1892,41 @@ print(f'''{{
 
         for case in valid_cases:
             compile(case, "<string>", "exec")
+
+    def test_raw_fstring_format_spec(self):
+        # Test raw f-string format spec behavior (Issue #137314).
+        #
+        # Raw f-strings should preserve literal backslashes in format specifications,
+        # not interpret them as escape sequences.
+        class UnchangedFormat:
+            """Test helper that returns the format spec unchanged."""
+            def __format__(self, format):
+                return format
+
+        # Test basic escape sequences
+        self.assertEqual(f"{UnchangedFormat():\xFF}", 'ÿ')
+        self.assertEqual(rf"{UnchangedFormat():\xFF}", '\\xFF')
+
+        # Test nested expressions with raw/non-raw combinations
+        self.assertEqual(rf"{UnchangedFormat():{'\xFF'}}", 'ÿ')
+        self.assertEqual(f"{UnchangedFormat():{r'\xFF'}}", '\\xFF')
+        self.assertEqual(rf"{UnchangedFormat():{r'\xFF'}}", '\\xFF')
+
+        # Test continuation character in format specs
+        self.assertEqual(f"""{UnchangedFormat():{'a'\
+                        'b'}}""", 'ab')
+        self.assertEqual(rf"""{UnchangedFormat():{'a'\
+                         'b'}}""", 'ab')
+
+        # Test multiple format specs in same raw f-string
+        self.assertEqual(rf"{UnchangedFormat():\xFF} {UnchangedFormat():\n}", '\\xFF \\n')
+
+    def test_gh139516(self):
+        with temp_cwd():
+            script = 'script.py'
+            with open(script, 'wb') as f:
+                f.write('''def f(a): pass\nf"{f(a=lambda: 'à'\n)}"'''.encode())
+            assert_python_ok(script)
 
 
 if __name__ == '__main__':

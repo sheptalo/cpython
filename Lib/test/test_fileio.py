@@ -83,6 +83,12 @@ class AutoFileTests:
             fst = os.fstat(self.f.fileno())
             blksize = getattr(fst, 'st_blksize', blksize)
         self.assertEqual(self.f._blksize, blksize)
+        # it is read-only
+        with self.assertRaises(AttributeError):
+            self.f._blksize = blksize
+        with self.assertRaises(AttributeError):
+            del self.f._blksize
+
 
     # verify readinto
     def testReadintoByteArray(self):
@@ -503,6 +509,21 @@ class CAutoFileTests(AutoFileTests, unittest.TestCase):
     FileIO = _io.FileIO
     modulename = '_io'
 
+    def testFinalizing(self):
+        # test the private _finalizing attribute
+        self.assertIs(self.f._finalizing, False)
+        self.f._finalizing = True
+        self.assertIs(self.f._finalizing, True)
+        with self.assertRaisesRegex(TypeError,
+                                    'attribute value type must be bool'):
+            self.f._finalizing = 1
+        with self.assertRaisesRegex(TypeError,
+                                    "can't delete numeric/char attribute"):
+            del self.f._finalizing
+        # closing a file which is being finalized emits a ResourceWarning
+        self.f._finalizing = False
+
+
 class PyAutoFileTests(AutoFileTests, unittest.TestCase):
     FileIO = _pyio.FileIO
     modulename = '_pyio'
@@ -591,7 +612,7 @@ class OtherFileTests:
         try:
             f.write(b"abc")
             f.close()
-            with open(TESTFN_ASCII, "rb") as f:
+            with self.open(TESTFN_ASCII, "rb") as f:
                 self.assertEqual(f.read(), b"abc")
         finally:
             os.unlink(TESTFN_ASCII)
@@ -608,7 +629,7 @@ class OtherFileTests:
         try:
             f.write(b"abc")
             f.close()
-            with open(TESTFN_UNICODE, "rb") as f:
+            with self.open(TESTFN_UNICODE, "rb") as f:
                 self.assertEqual(f.read(), b"abc")
         finally:
             os.unlink(TESTFN_UNICODE)
@@ -692,13 +713,13 @@ class OtherFileTests:
 
     def testAppend(self):
         try:
-            f = open(TESTFN, 'wb')
+            f = self.FileIO(TESTFN, 'wb')
             f.write(b'spam')
             f.close()
-            f = open(TESTFN, 'ab')
+            f = self.FileIO(TESTFN, 'ab')
             f.write(b'eggs')
             f.close()
-            f = open(TESTFN, 'rb')
+            f = self.FileIO(TESTFN, 'rb')
             d = f.read()
             f.close()
             self.assertEqual(d, b'spameggs')
@@ -734,6 +755,7 @@ class OtherFileTests:
 class COtherFileTests(OtherFileTests, unittest.TestCase):
     FileIO = _io.FileIO
     modulename = '_io'
+    open = _io.open
 
     @cpython_only
     def testInvalidFd_overflow(self):
@@ -755,6 +777,7 @@ class COtherFileTests(OtherFileTests, unittest.TestCase):
 class PyOtherFileTests(OtherFileTests, unittest.TestCase):
     FileIO = _pyio.FileIO
     modulename = '_pyio'
+    open = _pyio.open
 
     def test_open_code(self):
         # Check that the default behaviour of open_code matches

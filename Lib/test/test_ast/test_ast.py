@@ -24,7 +24,9 @@ except ImportError:
 
 from test import support
 from test.support import os_helper
-from test.support import skip_emscripten_stack_overflow, skip_wasi_stack_overflow
+from test.support import (skip_emscripten_stack_overflow,
+                          skip_wasi_stack_overflow,
+                          skip_if_unlimited_stack_size, skip_if_huge_c_stack)
 from test.support.ast_helper import ASTTestMixin
 from test.support.import_helper import ensure_lazy_imports
 from test.test_ast.utils import to_tuple
@@ -150,6 +152,15 @@ class AST_Tests(unittest.TestCase):
             self.assertRaises(TypeError, ast.parse, ast.Constant(42),
                               optimize=optval)
 
+    def test_parse_ast_func_type(self):
+        # see gh-156689
+        tree = ast.parse('(int, str) -> bool', mode='func_type')
+        self.assertEqual(ast.dump(ast.parse(tree, mode='func_type')),
+                         ast.dump(tree))
+        self.assertRaises(TypeError, ast.parse, ast.Constant(42),
+                          mode='func_type')
+        self.assertRaises(TypeError, ast.parse, tree, mode='exec')
+
     def test_optimization_levels__debug__(self):
         cases = [(-1, '__debug__'), (0, '__debug__'), (1, False), (2, False)]
         for (optval, expected) in cases:
@@ -220,6 +231,131 @@ class AST_Tests(unittest.TestCase):
                 # This also must not crash:
                 ast.parse(tree, optimize=2)
 
+    def test_docstring_optimization_single_node(self):
+        # https://github.com/python/cpython/issues/137308
+        class_example1 = textwrap.dedent('''
+            class A:
+                """Docstring"""
+        ''')
+        class_example2 = textwrap.dedent('''
+            class A:
+                """
+                Docstring"""
+        ''')
+        def_example1 = textwrap.dedent('''
+            def some():
+                """Docstring"""
+        ''')
+        def_example2 = textwrap.dedent('''
+            def some():
+                """Docstring
+                                       """
+        ''')
+        async_def_example1 = textwrap.dedent('''
+            async def some():
+                """Docstring"""
+        ''')
+        async_def_example2 = textwrap.dedent('''
+            async def some():
+                """
+                Docstring
+            """
+        ''')
+        for code in [
+            class_example1,
+            class_example2,
+            def_example1,
+            def_example2,
+            async_def_example1,
+            async_def_example2,
+        ]:
+            for opt_level in [0, 1, 2]:
+                with self.subTest(code=code, opt_level=opt_level):
+                    mod = ast.parse(code, optimize=opt_level)
+                    self.assertEqual(len(mod.body[0].body), 1)
+                    if opt_level == 2:
+                        pass_stmt = mod.body[0].body[0]
+                        self.assertIsInstance(pass_stmt, ast.Pass)
+                        self.assertEqual(
+                            vars(pass_stmt),
+                            {
+                                'lineno': 3,
+                                'col_offset': 4,
+                                'end_lineno': 3,
+                                'end_col_offset': 8,
+                            },
+                        )
+                    else:
+                        self.assertIsInstance(mod.body[0].body[0], ast.Expr)
+                        self.assertIsInstance(
+                            mod.body[0].body[0].value,
+                            ast.Constant,
+                        )
+
+                    compile(code, "a", "exec")
+                    compile(code, "a", "exec", optimize=opt_level)
+                    compile(mod, "a", "exec")
+                    compile(mod, "a", "exec", optimize=opt_level)
+
+    def test_docstring_optimization_multiple_nodes(self):
+        # https://github.com/python/cpython/issues/137308
+        class_example = textwrap.dedent(
+            """
+            class A:
+                '''
+                Docstring
+                '''
+                x = 1
+            """
+        )
+
+        def_example = textwrap.dedent(
+            """
+            def some():
+                '''
+                Docstring
+
+            '''
+                x = 1
+            """
+        )
+
+        async_def_example = textwrap.dedent(
+            """
+            async def some():
+
+                '''Docstring
+
+            '''
+                x = 1
+            """
+        )
+
+        for code in [
+            class_example,
+            def_example,
+            async_def_example,
+        ]:
+            for opt_level in [0, 1, 2]:
+                with self.subTest(code=code, opt_level=opt_level):
+                    mod = ast.parse(code, optimize=opt_level)
+                    if opt_level == 2:
+                        self.assertNotIsInstance(
+                            mod.body[0].body[0],
+                            (ast.Pass, ast.Expr),
+                        )
+                    else:
+                        self.assertIsInstance(mod.body[0].body[0], ast.Expr)
+                        self.assertIsInstance(
+                            mod.body[0].body[0].value,
+                            ast.Constant,
+                        )
+
+                    compile(code, "a", "exec")
+                    compile(code, "a", "exec", optimize=opt_level)
+                    compile(mod, "a", "exec")
+                    compile(mod, "a", "exec", optimize=opt_level)
+
     def test_slice(self):
         slc = ast.parse("x[::]").body[0].value.slice
         self.assertIsNone(slc.upper)
@@ -275,12 +411,12 @@ class AST_Tests(unittest.TestCase):
         self.assertEqual(alias.end_col_offset, 17)
 
     def test_base_classes(self):
-        self.assertTrue(issubclass(ast.For, ast.stmt))
-        self.assertTrue(issubclass(ast.Name, ast.expr))
-        self.assertTrue(issubclass(ast.stmt, ast.AST))
-        self.assertTrue(issubclass(ast.expr, ast.AST))
-        self.assertTrue(issubclass(ast.comprehension, ast.AST))
-        self.assertTrue(issubclass(ast.Gt, ast.AST))
+        self.assertIsSubclass(ast.For, ast.stmt)
+        self.assertIsSubclass(ast.Name, ast.expr)
+        self.assertIsSubclass(ast.stmt, ast.AST)
+        self.assertIsSubclass(ast.expr, ast.AST)
+        self.assertIsSubclass(ast.comprehension, ast.AST)
+        self.assertIsSubclass(ast.Gt, ast.AST)
 
     def test_field_attr_existence(self):
         for name, item in ast.__dict__.items():
@@ -821,6 +957,34 @@ class AST_Tests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, f"identifier field can't represent '{constant}' constant"):
                 compile(expr, "<test>", "eval")
 
+    def test_constant_in_identifier_fields(self):
+        # gh-85260: an identifier field holding a constant name used to
+        # crash the compiler
+        for statement in [
+            "def x(): pass",
+            "async def x(): pass",
+            "class x: pass",
+            "from a import x",
+            "from a import b as x",
+            "from a import b, c, d as x",
+            "import x",
+            "import a, b, x",
+            "try: pass\nexcept A as x: pass",
+            "try: pass\nexcept A as b: pass\nexcept B as x: pass\n",
+        ]:
+            for constant in "True", "False", "None":
+                with self.subTest(statement=statement, constant=constant):
+                    tree = ast.parse(statement)
+                    for node in ast.walk(tree):
+                        for field, value in ast.iter_fields(node):
+                            if value == "x":
+                                setattr(node, field, constant)
+                    with self.assertRaisesRegex(
+                            ValueError,
+                            f"identifier field can't represent "
+                            f"'{constant}' constant"):
+                        compile(tree, "<test>", "exec")
+
     def test_constant_as_unicode_name(self):
         constants = [
             ("True", b"Tru\xe1\xb5\x89"),
@@ -863,10 +1027,13 @@ class AST_Tests(unittest.TestCase):
         enum._test_simple_enum(_Precedence, _ast_unparse._Precedence)
 
     @support.cpython_only
+    @support.run_with_limited_c_stack(
+        100_000 if sys.platform == "android" else 500_000)
     @skip_wasi_stack_overflow()
     @skip_emscripten_stack_overflow()
     def test_ast_recursion_limit(self):
-        crash_depth = 500_000
+        # Android test devices have less memory.
+        crash_depth = 100_000 if sys.platform == "android" else 500_000
         success_depth = 200
         if _testinternalcapi is not None:
             remaining = _testinternalcapi.get_c_recursion_remaining()
@@ -932,61 +1099,6 @@ class AST_Tests(unittest.TestCase):
                                     r"Exceeds the limit \(\d+ digits\)"):
             repr(ast.Constant(value=eval(source)))
 
-    def test_pep_765_warnings(self):
-        srcs = [
-            textwrap.dedent("""
-                 def f():
-                     try:
-                         pass
-                     finally:
-                         return 42
-                 """),
-            textwrap.dedent("""
-                 for x in y:
-                     try:
-                         pass
-                     finally:
-                         break
-                 """),
-            textwrap.dedent("""
-                 for x in y:
-                     try:
-                         pass
-                     finally:
-                         continue
-                 """),
-        ]
-        for src in srcs:
-            with self.assertWarnsRegex(SyntaxWarning, 'finally'):
-                ast.parse(src)
-
-    def test_pep_765_no_warnings(self):
-        srcs = [
-            textwrap.dedent("""
-                 try:
-                     pass
-                 finally:
-                     def f():
-                         return 42
-                 """),
-            textwrap.dedent("""
-                 try:
-                     pass
-                 finally:
-                     for x in y:
-                         break
-                 """),
-            textwrap.dedent("""
-                 try:
-                     pass
-                 finally:
-                     for x in y:
-                         continue
-                 """),
-        ]
-        for src in srcs:
-            ast.parse(src)
-
     def test_tstring(self):
         # Test AST structure for simple t-string
         tree = ast.parse('t"Hello"')
@@ -998,13 +1110,6 @@ class AST_Tests(unittest.TestCase):
         self.assertIsInstance(tree.body[0].value, ast.TemplateStr)
         self.assertIsInstance(tree.body[0].value.values[0], ast.Constant)
         self.assertIsInstance(tree.body[0].value.values[1], ast.Interpolation)
-
-        # Test AST for implicit concat of t-string with f-string
-        tree = ast.parse('t"Hello {name}" f"{name}"')
-        self.assertIsInstance(tree.body[0].value, ast.TemplateStr)
-        self.assertIsInstance(tree.body[0].value.values[0], ast.Constant)
-        self.assertIsInstance(tree.body[0].value.values[1], ast.Interpolation)
-        self.assertIsInstance(tree.body[0].value.values[2], ast.FormattedValue)
 
 
 class CopyTests(unittest.TestCase):
@@ -1039,6 +1144,7 @@ class CopyTests(unittest.TestCase):
                     ast2 = pickle.loads(pickle.dumps(tree, protocol))
                     self.assertEqual(to_tuple(ast2), to_tuple(tree))
 
+    @skip_if_unlimited_stack_size
     def test_copy_with_parents(self):
         # gh-120108
         code = """
@@ -1101,7 +1207,7 @@ class CopyTests(unittest.TestCase):
     def test_replace_interface(self):
         for klass in self.iter_ast_classes():
             with self.subTest(klass=klass):
-                self.assertTrue(hasattr(klass, '__replace__'))
+                self.assertHasAttr(klass, '__replace__')
 
             fields = set(klass._fields)
             with self.subTest(klass=klass, fields=fields):
@@ -1330,7 +1436,7 @@ class CopyTests(unittest.TestCase):
         context = node.ctx
 
         # explicit rejection of known instance fields
-        self.assertTrue(hasattr(node, 'extra'))
+        self.assertHasAttr(node, 'extra')
         msg = "Name.__replace__ got an unexpected keyword argument 'extra'."
         with self.assertRaisesRegex(TypeError, re.escape(msg)):
             copy.replace(node, extra=1)
@@ -1352,6 +1458,13 @@ class CopyTests(unittest.TestCase):
         self.assertIs(node.id, 'x')
         self.assertIs(node.ctx, context)
         self.assertRaises(AttributeError, getattr, node, 'unknown')
+
+    def test_replace_non_str_kwarg(self):
+        node = ast.Name(id="x")
+        errmsg = "got an unexpected keyword argument <object object"
+        with self.assertRaisesRegex(TypeError, errmsg):
+            node.__replace__(**{object(): "y"})
+
 
 class ASTHelpers_Test(unittest.TestCase):
     maxDiff = None
@@ -1544,15 +1657,39 @@ Module(
         )
 
         check_node(
+            ast.MatchSingleton(value=[]),
+            empty="MatchSingleton(value=[])",
+            full="MatchSingleton(value=[])",
+        )
+
+        check_node(
             ast.Constant(value=None),
             empty="Constant(value=None)",
             full="Constant(value=None)",
         )
 
         check_node(
+            ast.Constant(value=[]),
+            empty="Constant(value=[])",
+            full="Constant(value=[])",
+        )
+
+        check_node(
             ast.Constant(value=''),
             empty="Constant(value='')",
             full="Constant(value='')",
+        )
+
+        check_node(
+            ast.Interpolation(value=ast.Constant(42), str=None, conversion=-1),
+            empty="Interpolation(value=Constant(value=42), str=None, conversion=-1)",
+            full="Interpolation(value=Constant(value=42), str=None, conversion=-1)",
+        )
+
+        check_node(
+            ast.Interpolation(value=ast.Constant(42), str=[], conversion=-1),
+            empty="Interpolation(value=Constant(value=42), str=[], conversion=-1)",
+            full="Interpolation(value=Constant(value=42), str=[], conversion=-1)",
         )
 
         check_text(
@@ -1863,6 +2000,7 @@ Module(
         exec(code, ns)
         self.assertIn('sleep', ns)
 
+    @skip_if_huge_c_stack()
     @skip_emscripten_stack_overflow()
     def test_recursion_direct(self):
         e = ast.UnaryOp(op=ast.Not(), lineno=0, col_offset=0, operand=ast.Constant(1))
@@ -1871,6 +2009,7 @@ Module(
             with support.infinite_recursion():
                 compile(ast.Expression(e), "<test>", "eval")
 
+    @skip_if_huge_c_stack()
     @skip_emscripten_stack_overflow()
     def test_recursion_indirect(self):
         e = ast.UnaryOp(op=ast.Not(), lineno=0, col_offset=0, operand=ast.Constant(1))
@@ -3071,7 +3210,7 @@ class ASTConstructorTests(unittest.TestCase):
         with self.assertWarnsRegex(DeprecationWarning,
                                    r"FunctionDef\.__init__ missing 1 required positional argument: 'name'"):
             node = ast.FunctionDef(args=args)
-        self.assertFalse(hasattr(node, "name"))
+        self.assertNotHasAttr(node, "name")
         self.assertEqual(node.decorator_list, [])
         node = ast.FunctionDef(name='foo', args=args)
         self.assertEqual(node.name, 'foo')
@@ -3167,6 +3306,15 @@ class ASTConstructorTests(unittest.TestCase):
         self.assertEqual(obj.a, 1)
         self.assertEqual(obj.b, 2)
 
+    def test_malformed_fields_with_bytes(self):
+        class BadFields(ast.AST):
+            _fields = (b'\xff'*64,)
+            _field_types = {'a': int}
+
+        # This should not crash
+        with self.assertWarnsRegex(DeprecationWarning, r"Field b'\\xff\\xff.*' .*"):
+            obj = BadFields()
+
     def test_complete_field_types(self):
         class _AllFieldTypes(ast.AST):
             _fields = ('a', 'b')
@@ -3179,6 +3327,27 @@ class ASTConstructorTests(unittest.TestCase):
         obj = _AllFieldTypes()
         self.assertIs(obj.a, None)
         self.assertEqual(obj.b, [])
+
+    def test_non_str_kwarg(self):
+        warn_msg = "got an unexpected keyword argument <object object"
+        with (
+            self.assertRaises(TypeError),
+            self.assertWarnsRegex(DeprecationWarning, warn_msg),
+        ):
+            ast.Name(**{object(): 'y'})
+
+        class FakeStr:
+            def __init__(self, value):
+                self.value = value
+
+            def __hash__(self):
+                return hash(self.value)
+
+            def __eq__(self, other):
+                return isinstance(other, str) and self.value == other
+
+        with self.assertRaisesRegex(TypeError, "got multiple values for argument"):
+            ast.Name("x", **{FakeStr('id'): 'y'})
 
 
 @support.cpython_only
@@ -3292,6 +3461,7 @@ class CommandLineTests(unittest.TestCase):
         expect = self.text_normalize(expect)
         self.assertEqual(res, expect)
 
+    @support.requires_resource('cpu')
     def test_invocation(self):
         # test various combinations of parameters
         base_flags = (
@@ -3522,7 +3692,7 @@ class CommandLineTests(unittest.TestCase):
         self.check_output(source, expect, '--show-empty')
 
 
-class ASTOptimiziationTests(unittest.TestCase):
+class ASTOptimizationTests(unittest.TestCase):
     def wrap_expr(self, expr):
         return ast.Module(body=[ast.Expr(value=expr)])
 

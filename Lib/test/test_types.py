@@ -2,7 +2,7 @@
 
 from test.support import (
     run_with_locale, cpython_only, no_rerun,
-    MISSING_C_DOCSTRINGS, EqualToForwardRef,
+    MISSING_C_DOCSTRINGS, EqualToForwardRef, check_disallow_instantiation,
 )
 from test.support.script_helper import assert_python_ok
 from test.support.import_helper import import_fresh_module
@@ -517,8 +517,8 @@ class TypesTests(unittest.TestCase):
         # and a number after the decimal.  This is tricky, because
         # a totally empty format specifier means something else.
         # So, just use a sign flag
-        test(1e200, '+g', '+1e+200')
-        test(1e200, '+', '+1e+200')
+        test(1.25e200, '+g', '+1.25e+200')
+        test(1.25e200, '+', '+1.25e+200')
 
         test(1.1e200, '+g', '+1.1e+200')
         test(1.1e200, '+', '+1.1e+200')
@@ -827,15 +827,15 @@ class UnionTests(unittest.TestCase):
                 self.assertIsInstance(True, x)
                 self.assertIsInstance('a', x)
                 self.assertNotIsInstance(None, x)
-                self.assertTrue(issubclass(int, x))
-                self.assertTrue(issubclass(bool, x))
-                self.assertTrue(issubclass(str, x))
-                self.assertFalse(issubclass(type(None), x))
+                self.assertIsSubclass(int, x)
+                self.assertIsSubclass(bool, x)
+                self.assertIsSubclass(str, x)
+                self.assertNotIsSubclass(type(None), x)
 
         for x in (int | None, typing.Union[int, None]):
             with self.subTest(x=x):
                 self.assertIsInstance(None, x)
-                self.assertTrue(issubclass(type(None), x))
+                self.assertIsSubclass(type(None), x)
 
         for x in (
             int | collections.abc.Mapping,
@@ -844,8 +844,8 @@ class UnionTests(unittest.TestCase):
             with self.subTest(x=x):
                 self.assertIsInstance({}, x)
                 self.assertNotIsInstance((), x)
-                self.assertTrue(issubclass(dict, x))
-                self.assertFalse(issubclass(list, x))
+                self.assertIsSubclass(dict, x)
+                self.assertNotIsSubclass(list, x)
 
     def test_instancecheck_and_subclasscheck_order(self):
         T = typing.TypeVar('T')
@@ -857,7 +857,7 @@ class UnionTests(unittest.TestCase):
         for x in will_resolve:
             with self.subTest(x=x):
                 self.assertIsInstance(1, x)
-                self.assertTrue(issubclass(int, x))
+                self.assertIsSubclass(int, x)
 
         wont_resolve = (
             T | int,
@@ -890,7 +890,7 @@ class UnionTests(unittest.TestCase):
             def __subclasscheck__(cls, sub):
                 1/0
         x = int | BadMeta('A', (), {})
-        self.assertTrue(issubclass(int, x))
+        self.assertIsSubclass(int, x)
         self.assertRaises(ZeroDivisionError, issubclass, list, x)
 
     def test_or_type_operator_with_TypeVar(self):
@@ -1148,8 +1148,7 @@ class UnionTests(unittest.TestCase):
                              msg='Check for union reference leak.')
 
     def test_instantiation(self):
-        with self.assertRaises(TypeError):
-            types.UnionType()
+        check_disallow_instantiation(self, types.UnionType)
         self.assertIs(int, types.UnionType[int])
         self.assertIs(int, types.UnionType[int, int])
         self.assertEqual(int | str, types.UnionType[int, str])
@@ -1399,7 +1398,7 @@ class ClassCreationTests(unittest.TestCase):
 
     def test_new_class_subclass(self):
         C = types.new_class("C", (int,))
-        self.assertTrue(issubclass(C, int))
+        self.assertIsSubclass(C, int)
 
     def test_new_class_meta(self):
         Meta = self.Meta
@@ -1444,7 +1443,7 @@ class ClassCreationTests(unittest.TestCase):
                             bases=(int,),
                             kwds=dict(metaclass=Meta, z=2),
                             exec_body=func)
-        self.assertTrue(issubclass(C, int))
+        self.assertIsSubclass(C, int)
         self.assertIsInstance(C, Meta)
         self.assertEqual(C.x, 0)
         self.assertEqual(C.y, 1)
@@ -2114,6 +2113,21 @@ class SimpleNamespaceTests(unittest.TestCase):
         self.assertIs(type(spam2), Spam)
         self.assertEqual(vars(spam2), {'ham': 5, 'eggs': 9})
 
+    def test_replace_invalid_subtype(self):
+        # See https://github.com/python/cpython/issues/143636.
+        class MyNS(types.SimpleNamespace):
+            def __new__(cls, *args, **kwargs):
+                if created:
+                    return 12345
+                return super().__new__(cls)
+
+        created = False
+        ns = MyNS()
+        created = True
+        err = (r"^expect types\.SimpleNamespace type, "
+               r"but .+\.MyNS\(\) returned 'int' object")
+        self.assertRaisesRegex(TypeError, err, copy.replace, ns)
+
     def test_fake_namespace_compare(self):
         # Issue #24257: Incorrect use of PyObject_IsInstance() caused
         # SystemError.
@@ -2241,8 +2255,8 @@ class CoroutineTests(unittest.TestCase):
         self.assertIs(wrapper.__name__, gen.__name__)
 
         # Test AttributeErrors
-        for name in {'gi_running', 'gi_frame', 'gi_code', 'gi_yieldfrom',
-                     'cr_running', 'cr_frame', 'cr_code', 'cr_await'}:
+        for name in {'gi_running', 'gi_frame', 'gi_code', 'gi_yieldfrom', 'gi_suspended',
+                     'cr_running', 'cr_frame', 'cr_code', 'cr_await', 'cr_suspended'}:
             with self.assertRaises(AttributeError):
                 getattr(wrapper, name)
 
@@ -2251,14 +2265,17 @@ class CoroutineTests(unittest.TestCase):
         gen.gi_frame = object()
         gen.gi_code = object()
         gen.gi_yieldfrom = object()
+        gen.gi_suspended = object()
         self.assertIs(wrapper.gi_running, gen.gi_running)
         self.assertIs(wrapper.gi_frame, gen.gi_frame)
         self.assertIs(wrapper.gi_code, gen.gi_code)
         self.assertIs(wrapper.gi_yieldfrom, gen.gi_yieldfrom)
+        self.assertIs(wrapper.gi_suspended, gen.gi_suspended)
         self.assertIs(wrapper.cr_running, gen.gi_running)
         self.assertIs(wrapper.cr_frame, gen.gi_frame)
         self.assertIs(wrapper.cr_code, gen.gi_code)
         self.assertIs(wrapper.cr_await, gen.gi_yieldfrom)
+        self.assertIs(wrapper.cr_suspended, gen.gi_suspended)
 
         wrapper.close()
         gen.close.assert_called_once_with()
@@ -2377,7 +2394,7 @@ class CoroutineTests(unittest.TestCase):
         self.assertIs(wrapper.__await__(), gen)
 
         for name in ('__name__', '__qualname__', 'gi_code',
-                     'gi_running', 'gi_frame'):
+                     'gi_running', 'gi_frame', 'gi_suspended'):
             self.assertIs(getattr(foo(), name),
                           getattr(gen, name))
         self.assertIs(foo().cr_code, gen.gi_code)
@@ -2440,8 +2457,8 @@ class CoroutineTests(unittest.TestCase):
         self.assertEqual(repr(wrapper), str(wrapper))
         self.assertTrue(set(dir(wrapper)).issuperset({
             '__await__', '__iter__', '__next__', 'cr_code', 'cr_running',
-            'cr_frame', 'gi_code', 'gi_frame', 'gi_running', 'send',
-            'close', 'throw'}))
+            'cr_frame', 'cr_suspended', 'gi_code', 'gi_frame', 'gi_running',
+            'gi_suspended', 'send', 'close', 'throw'}))
 
 
 class FunctionTests(unittest.TestCase):
@@ -2513,15 +2530,16 @@ class SubinterpreterTests(unittest.TestCase):
     def setUpClass(cls):
         global interpreters
         try:
-            from test.support import interpreters
+            from concurrent import interpreters
         except ModuleNotFoundError:
             raise unittest.SkipTest('subinterpreters required')
-        import test.support.interpreters.channels
+        from test.support import channels  # noqa: F401
+        cls.create_channel = staticmethod(channels.create)
 
     @cpython_only
     @no_rerun('channels (and queues) might have a refleak; see gh-122199')
     def test_static_types_inherited_slots(self):
-        rch, sch = interpreters.channels.create()
+        rch, sch = self.create_channel()
 
         script = textwrap.dedent("""
             import test.support
@@ -2547,7 +2565,7 @@ class SubinterpreterTests(unittest.TestCase):
         main_results = collate_results(raw)
 
         interp = interpreters.create()
-        interp.exec('from test.support import interpreters')
+        interp.exec('from concurrent import interpreters')
         interp.prepare_main(sch=sch)
         interp.exec(script)
         raw = rch.recv_nowait()

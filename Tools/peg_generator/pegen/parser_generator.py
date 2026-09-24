@@ -1,22 +1,11 @@
-import sys
 import ast
 import contextlib
 import re
+import sys
+import unicodedata
 from abc import abstractmethod
-from typing import (
-    IO,
-    AbstractSet,
-    Any,
-    Dict,
-    Iterable,
-    Iterator,
-    List,
-    Optional,
-    Set,
-    Text,
-    Tuple,
-    Union,
-)
+from collections.abc import Iterable, Iterator, Set
+from typing import IO, Any
 
 from pegen import sccutils
 from pegen.grammar import (
@@ -44,8 +33,8 @@ from pegen.grammar import (
 class RuleCollectorVisitor(GrammarVisitor):
     """Visitor that invokes a provided callmaker visitor with just the NamedItem nodes"""
 
-    def __init__(self, rules: Dict[str, Rule], callmakervisitor: GrammarVisitor) -> None:
-        self.rulses = rules
+    def __init__(self, rules: dict[str, Rule], callmakervisitor: GrammarVisitor) -> None:
+        self.rules = rules
         self.callmaker = callmakervisitor
 
     def visit_Rule(self, rule: Rule) -> None:
@@ -56,9 +45,9 @@ class RuleCollectorVisitor(GrammarVisitor):
 
 
 class KeywordCollectorVisitor(GrammarVisitor):
-    """Visitor that collects all the keywods and soft keywords in the Grammar"""
+    """Visitor that collects all the keywords and soft keywords in the Grammar"""
 
-    def __init__(self, gen: "ParserGenerator", keywords: Dict[str, int], soft_keywords: Set[str]):
+    def __init__(self, gen: "ParserGenerator", keywords: dict[str, int], soft_keywords: set[str]):
         self.generator = gen
         self.keywords = keywords
         self.soft_keywords = soft_keywords
@@ -73,7 +62,7 @@ class KeywordCollectorVisitor(GrammarVisitor):
 
 
 class RuleCheckingVisitor(GrammarVisitor):
-    def __init__(self, rules: Dict[str, Rule], tokens: Set[str]):
+    def __init__(self, rules: dict[str, Rule], tokens: set[str]):
         self.rules = rules
         self.tokens = tokens
         # If python < 3.12 add the virtual fstring tokens
@@ -100,11 +89,12 @@ class RuleCheckingVisitor(GrammarVisitor):
 class ParserGenerator:
     callmakervisitor: GrammarVisitor
 
-    def __init__(self, grammar: Grammar, tokens: Set[str], file: Optional[IO[Text]]):
+    def __init__(self, grammar: Grammar, tokens: set[str], file: IO[str] | None):
         self.grammar = grammar
         self.tokens = tokens
-        self.keywords: Dict[str, int] = {}
-        self.soft_keywords: Set[str] = set()
+        self.keywords: dict[str, int] = {}
+        self.soft_keywords: set[str] = set()
+        self.keyword_aliases: dict[str, str] = {}  # alias -> keyword
         self.rules = grammar.rules
         self.validate_rule_names()
         if "trailer" not in grammar.metas and "start" not in self.rules:
@@ -117,8 +107,8 @@ class ParserGenerator:
         self.first_graph, self.first_sccs = compute_left_recursives(self.rules)
         self.counter = 0  # For name_rule()/name_loop()
         self.keyword_counter = 499  # For keyword_type()
-        self.all_rules: Dict[str, Rule] = self.rules.copy()  # Rules + temporal rules
-        self._local_variable_stack: List[List[str]] = []
+        self.all_rules: dict[str, Rule] = self.rules.copy()  # Rules + temporal rules
+        self._local_variable_stack: list[list[str]] = []
 
     def validate_rule_names(self) -> None:
         for rule in self.rules:
@@ -132,7 +122,7 @@ class ParserGenerator:
         self._local_variable_stack.pop()
 
     @property
-    def local_variable_names(self) -> List[str]:
+    def local_variable_names(self) -> list[str]:
         return self._local_variable_stack[-1]
 
     @abstractmethod
@@ -162,9 +152,10 @@ class ParserGenerator:
         keyword_collector = KeywordCollectorVisitor(self, self.keywords, self.soft_keywords)
         for rule in self.all_rules.values():
             keyword_collector.visit(rule)
+        self.collect_keyword_aliases()
 
         rule_collector = RuleCollectorVisitor(self.rules, self.callmakervisitor)
-        done: Set[str] = set()
+        done: set[str] = set()
         while True:
             computed_rules = list(self.all_rules)
             todo = [i for i in computed_rules if i not in done]
@@ -173,6 +164,53 @@ class ParserGenerator:
             done = set(self.all_rules)
             for rulename in todo:
                 rule_collector.visit(self.all_rules[rulename])
+
+    def collect_keyword_aliases(self) -> None:
+        """Register the aliases given by the @keyword_aliases meta.
+
+        The meta is a dict literal mapping a keyword or a soft keyword used
+        in the grammar to an alias (or to a tuple of aliases).  An alias of
+        a keyword is a keyword with the same token type, so the parser can't
+        tell it apart from the original.  An alias of a soft keyword is
+        a soft keyword accepted everywhere the original one is.
+        """
+        meta = self.grammar.metas.get("keyword_aliases")
+        if meta is None:
+            return
+        try:
+            table = ast.literal_eval(meta)
+        except (SyntaxError, ValueError) as e:
+            raise GrammarError(f"Invalid @keyword_aliases: {e}") from None
+        if not isinstance(table, dict):
+            raise GrammarError("@keyword_aliases must be a dict literal")
+        for keyword, aliases in table.items():
+            if keyword in self.keyword_aliases or (
+                keyword not in self.keywords and keyword not in self.soft_keywords
+            ):
+                raise GrammarError(
+                    f"Cannot alias {keyword!r}: it is not a keyword used in the grammar rules"
+                )
+            if not isinstance(aliases, (tuple, list)):
+                aliases = (aliases,)
+            for alias in aliases:
+                if not (
+                    isinstance(alias, str)
+                    and alias.isidentifier()
+                    and unicodedata.normalize("NFKC", alias) == alias
+                ):
+                    raise GrammarError(
+                        f"Invalid alias of {keyword!r}: {alias!r} "
+                        f"is not an NFKC-normalized identifier"
+                    )
+                if alias in self.keywords or alias in self.soft_keywords:
+                    raise GrammarError(
+                        f"Invalid alias of {keyword!r}: {alias!r} is already a keyword"
+                    )
+                if keyword in self.keywords:
+                    self.keywords[alias] = self.keywords[keyword]
+                else:
+                    self.soft_keywords.add(alias)
+                self.keyword_aliases[alias] = keyword
 
     def keyword_type(self) -> int:
         self.keyword_counter += 1
@@ -229,10 +267,10 @@ class ParserGenerator:
 
 
 class NullableVisitor(GrammarVisitor):
-    def __init__(self, rules: Dict[str, Rule]) -> None:
+    def __init__(self, rules: dict[str, Rule]) -> None:
         self.rules = rules
-        self.visited: Set[Any] = set()
-        self.nullables: Set[Union[Rule, NamedItem]] = set()
+        self.visited: set[Any] = set()
+        self.nullables: set[Rule | NamedItem] = set()
 
     def visit_Rule(self, rule: Rule) -> bool:
         if rule in self.visited:
@@ -294,7 +332,7 @@ class NullableVisitor(GrammarVisitor):
         return not node.value
 
 
-def compute_nullables(rules: Dict[str, Rule]) -> Set[Any]:
+def compute_nullables(rules: dict[str, Rule]) -> set[Any]:
     """Compute which rules in a grammar are nullable.
 
     Thanks to TatSu (tatsu/leftrec.py) for inspiration.
@@ -306,12 +344,12 @@ def compute_nullables(rules: Dict[str, Rule]) -> Set[Any]:
 
 
 class InitialNamesVisitor(GrammarVisitor):
-    def __init__(self, rules: Dict[str, Rule]) -> None:
+    def __init__(self, rules: dict[str, Rule]) -> None:
         self.rules = rules
         self.nullables = compute_nullables(rules)
 
-    def generic_visit(self, node: Iterable[Any], *args: Any, **kwargs: Any) -> Set[Any]:
-        names: Set[str] = set()
+    def generic_visit(self, node: Iterable[Any], *args: Any, **kwargs: Any) -> set[Any]:
+        names: set[str] = set()
         for value in node:
             if isinstance(value, list):
                 for item in value:
@@ -320,33 +358,33 @@ class InitialNamesVisitor(GrammarVisitor):
                 names |= self.visit(value, *args, **kwargs)
         return names
 
-    def visit_Alt(self, alt: Alt) -> Set[Any]:
-        names: Set[str] = set()
+    def visit_Alt(self, alt: Alt) -> set[Any]:
+        names: set[str] = set()
         for item in alt.items:
             names |= self.visit(item)
             if item not in self.nullables:
                 break
         return names
 
-    def visit_Forced(self, force: Forced) -> Set[Any]:
+    def visit_Forced(self, force: Forced) -> set[Any]:
         return set()
 
-    def visit_LookAhead(self, lookahead: Lookahead) -> Set[Any]:
+    def visit_LookAhead(self, lookahead: Lookahead) -> set[Any]:
         return set()
 
-    def visit_Cut(self, cut: Cut) -> Set[Any]:
+    def visit_Cut(self, cut: Cut) -> set[Any]:
         return set()
 
-    def visit_NameLeaf(self, node: NameLeaf) -> Set[Any]:
+    def visit_NameLeaf(self, node: NameLeaf) -> set[Any]:
         return {node.value}
 
-    def visit_StringLeaf(self, node: StringLeaf) -> Set[Any]:
+    def visit_StringLeaf(self, node: StringLeaf) -> set[Any]:
         return set()
 
 
 def compute_left_recursives(
-    rules: Dict[str, Rule]
-) -> Tuple[Dict[str, AbstractSet[str]], List[AbstractSet[str]]]:
+    rules: dict[str, Rule]
+) -> tuple[dict[str, Set[str]], list[Set[str]]]:
     graph = make_first_graph(rules)
     sccs = list(sccutils.strongly_connected_components(graph.keys(), graph))
     for scc in sccs:
@@ -374,7 +412,7 @@ def compute_left_recursives(
     return graph, sccs
 
 
-def make_first_graph(rules: Dict[str, Rule]) -> Dict[str, AbstractSet[str]]:
+def make_first_graph(rules: dict[str, Rule]) -> dict[str, Set[str]]:
     """Compute the graph of left-invocations.
 
     There's an edge from A to B if A may invoke B at its initial
@@ -384,7 +422,7 @@ def make_first_graph(rules: Dict[str, Rule]) -> Dict[str, AbstractSet[str]]:
     """
     initial_name_visitor = InitialNamesVisitor(rules)
     graph = {}
-    vertices: Set[str] = set()
+    vertices: set[str] = set()
     for rulename, rhs in rules.items():
         graph[rulename] = names = initial_name_visitor.visit(rhs)
         vertices |= names

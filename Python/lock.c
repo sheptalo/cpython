@@ -58,7 +58,7 @@ _PyMutex_LockTimed(PyMutex *m, PyTime_t timeout, _PyLockFlags flags)
             return PY_LOCK_ACQUIRED;
         }
     }
-    else if (timeout == 0) {
+    if (timeout == 0) {
         return PY_LOCK_FAILURE;
     }
 
@@ -212,7 +212,16 @@ _PyRawMutex_LockSlow(_PyRawMutex *m)
 
         // Wait for us to be woken up. Note that we still have to lock the
         // mutex ourselves: it is NOT handed off to us.
-        _PySemaphore_Wait(&waiter.sema, -1, /*detach=*/0);
+        //
+        // Loop until we observe an actual wakeup. A return of Py_PARK_INTR
+        // could otherwise let us exit _PySemaphore_Wait and destroy
+        // `waiter.sema` while _PyRawMutex_UnlockSlow's matching
+        // _PySemaphore_Wakeup is still pending, since the unlocker has
+        // already CAS-removed us from the waiter list without any handshake.
+        int res;
+        do {
+            res = _PySemaphore_Wait(&waiter.sema, -1, /*detach=*/0);
+        } while (res != Py_PARK_OK);
     }
 
     _PySemaphore_Destroy(&waiter.sema);
@@ -618,4 +627,12 @@ PyMutex_Unlock(PyMutex *m)
     if (_PyMutex_TryUnlock(m) < 0) {
         Py_FatalError("unlocking mutex that is not locked");
     }
+}
+
+
+#undef PyMutex_IsLocked
+int
+PyMutex_IsLocked(PyMutex *m)
+{
+    return _PyMutex_IsLocked(m);
 }

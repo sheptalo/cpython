@@ -885,10 +885,14 @@ def move(src, dst, copy_function=copy2):
     If dst already exists but is not a directory, it may be overwritten
     depending on os.rename() semantics.
 
-    If the destination is on our current filesystem, then rename() is used.
-    Otherwise, src is copied to the destination and then removed. Symlinks are
-    recreated under the new name if os.rename() fails because of cross
-    filesystem renames.
+    os.rename() is preferably used if the source and destination are on the
+    same filesystem. In case os.rename() fails due to OSError (e.g. the user
+    has write permission to *dst* file but not to its parent directory),
+    this method falls back to using *copy_function* silently.
+    Symlinks are also recreated under the new name if os.rename() fails
+    because of cross filesystem renames.
+
+    It's recommended to use os.rename() if atomic move is strictly required.
 
     The optional `copy_function` argument is a callable that will be used
     to copy the source or it will be delegated to `copytree`.
@@ -940,8 +944,8 @@ def move(src, dst, copy_function=copy2):
     return real_dst
 
 def _destinsrc(src, dst):
-    src = os.path.abspath(src)
-    dst = os.path.abspath(dst)
+    src = os.path.realpath(src)
+    dst = os.path.realpath(dst)
     if not src.endswith(os.path.sep):
         src += os.path.sep
     if not dst.endswith(os.path.sep):
@@ -994,14 +998,14 @@ def _make_tarball(base_name, base_dir, compress="gzip", verbose=0, dry_run=0,
     """Create a (possibly compressed) tar file from all the files under
     'base_dir'.
 
-    'compress' must be "gzip" (the default), "bzip2", "xz", or None.
+    'compress' must be "gzip" (the default), "bzip2", "xz", "zst", or None.
 
     'owner' and 'group' can be used to define an owner and a group for the
     archive that is being built. If not provided, the current owner and group
     will be used.
 
     The output tar file will be named 'base_name' +  ".tar", possibly plus
-    the appropriate compression extension (".gz", ".bz2", or ".xz").
+    the appropriate compression extension (".gz", ".bz2", ".xz", or ".zst").
 
     Returns the output filename.
     """
@@ -1187,7 +1191,7 @@ def make_archive(base_name, format, root_dir=None, base_dir=None, verbose=0,
 
     'base_name' is the name of the file to create, minus any format-specific
     extension; 'format' is the archive format: one of "zip", "tar", "gztar",
-    "bztar", "zstdtar", or "xztar".  Or any other registered format.
+    "bztar", "xztar", or "zstdtar".  Or any other registered format.
 
     'root_dir' is a directory that will be the root directory of the
     archive; ie. we typically chdir into 'root_dir' before creating the
@@ -1314,30 +1318,12 @@ def _unpack_zipfile(filename, extract_dir):
     if not zipfile.is_zipfile(filename):
         raise ReadError("%s is not a zip file" % filename)
 
-    zip = zipfile.ZipFile(filename)
-    try:
-        for info in zip.infolist():
-            name = info.filename
-
-            # don't extract absolute paths or ones with .. in them
-            if name.startswith('/') or '..' in name:
-                continue
-
-            targetpath = os.path.join(extract_dir, *name.split('/'))
-            if not targetpath:
-                continue
-
-            _ensure_directory(targetpath)
-            if not name.endswith('/'):
-                # file
-                with zip.open(name, 'r') as source, \
-                        open(targetpath, 'wb') as target:
-                    copyfileobj(source, target)
-    finally:
-        zip.close()
+    with zipfile.ZipFile(filename) as zip:
+        zip._ignore_invalid_names = True
+        zip.extractall(extract_dir)
 
 def _unpack_tarfile(filename, extract_dir, *, filter=None):
-    """Unpack tar/tar.gz/tar.bz2/tar.xz `filename` to `extract_dir`
+    """Unpack tar/tar.gz/tar.bz2/tar.xz/tar.zst `filename` to `extract_dir`
     """
     import tarfile  # late import for breaking circular dependency
     try:
@@ -1392,7 +1378,7 @@ def unpack_archive(filename, extract_dir=None, format=None, *, filter=None):
     is unpacked. If not provided, the current working directory is used.
 
     `format` is the archive format: one of "zip", "tar", "gztar", "bztar",
-    or "xztar".  Or any other registered format.  If not provided,
+    "xztar", or "zstdtar".  Or any other registered format.  If not provided,
     unpack_archive will use the filename extension and see if an unpacker
     was registered for that extension.
 

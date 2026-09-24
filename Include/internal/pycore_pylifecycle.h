@@ -41,6 +41,7 @@ extern PyStatus _Py_HashRandomization_Init(const PyConfig *);
 
 extern PyStatus _PyGC_Init(PyInterpreterState *interp);
 extern PyStatus _PyAtExit_Init(PyInterpreterState *interp);
+extern PyStatus _PyDateTime_InitTypes(PyInterpreterState *interp);
 
 /* Various internal finalizers */
 
@@ -109,9 +110,6 @@ extern int _Py_LegacyLocaleDetected(int warn);
 
 // Export for 'readline' shared extension
 PyAPI_FUNC(char*) _Py_SetLocaleFromEnv(int category);
-
-// Export for special main.c string compiling with source tracebacks
-int _PyRun_SimpleStringFlagsWithName(const char *command, const char* name, PyCompilerFlags *flags);
 
 
 /* interpreter config */

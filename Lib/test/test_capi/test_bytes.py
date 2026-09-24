@@ -1,3 +1,4 @@
+import sys
 import unittest
 from test.support import import_helper
 
@@ -22,6 +23,7 @@ class CAPITest(unittest.TestCase):
         # Test PyBytes_Check()
         check = _testlimitedcapi.bytes_check
         self.assertTrue(check(b'abc'))
+        self.assertTrue(check(b''))
         self.assertFalse(check('abc'))
         self.assertFalse(check(bytearray(b'abc')))
         self.assertTrue(check(BytesSubclass(b'abc')))
@@ -36,6 +38,7 @@ class CAPITest(unittest.TestCase):
         # Test PyBytes_CheckExact()
         check = _testlimitedcapi.bytes_checkexact
         self.assertTrue(check(b'abc'))
+        self.assertTrue(check(b''))
         self.assertFalse(check('abc'))
         self.assertFalse(check(bytearray(b'abc')))
         self.assertFalse(check(BytesSubclass(b'abc')))
@@ -79,6 +82,7 @@ class CAPITest(unittest.TestCase):
         # Test PyBytes_FromObject()
         fromobject = _testlimitedcapi.bytes_fromobject
 
+        self.assertEqual(fromobject(b''), b'')
         self.assertEqual(fromobject(b'abc'), b'abc')
         self.assertEqual(fromobject(bytearray(b'abc')), b'abc')
         self.assertEqual(fromobject(BytesSubclass(b'abc')), b'abc')
@@ -108,6 +112,7 @@ class CAPITest(unittest.TestCase):
 
         self.assertEqual(asstring(b'abc', 4), b'abc\0')
         self.assertEqual(asstring(b'abc\0def', 8), b'abc\0def\0')
+        self.assertEqual(asstring(b'', 1), b'\0')
         self.assertRaises(TypeError, asstring, 'abc', 0)
         self.assertRaises(TypeError, asstring, object(), 0)
 
@@ -120,6 +125,7 @@ class CAPITest(unittest.TestCase):
 
         self.assertEqual(asstringandsize(b'abc', 4), (b'abc\0', 3))
         self.assertEqual(asstringandsize(b'abc\0def', 8), (b'abc\0def\0', 7))
+        self.assertEqual(asstringandsize(b'', 1), (b'\0', 0))
         self.assertEqual(asstringandsize_null(b'abc', 4), b'abc\0')
         self.assertRaises(ValueError, asstringandsize_null, b'abc\0def', 8)
         self.assertRaises(TypeError, asstringandsize, 'abc', 0)
@@ -134,6 +140,7 @@ class CAPITest(unittest.TestCase):
         # Test PyBytes_Repr()
         bytes_repr = _testlimitedcapi.bytes_repr
 
+        self.assertEqual(bytes_repr(b'', 0), r"""b''""")
         self.assertEqual(bytes_repr(b'''abc''', 0), r"""b'abc'""")
         self.assertEqual(bytes_repr(b'''abc''', 1), r"""b'abc'""")
         self.assertEqual(bytes_repr(b'''a'b"c"d''', 0), r"""b'a\'b"c"d'""")
@@ -163,6 +170,7 @@ class CAPITest(unittest.TestCase):
         self.assertEqual(concat(b'', bytearray(b'def')), b'def')
         self.assertEqual(concat(memoryview(b'xabcy')[1:4], b'def'), b'abcdef')
         self.assertEqual(concat(b'abc', memoryview(b'xdefy')[1:4]), b'abcdef')
+        self.assertEqual(concat(b'', b''), b'')
 
         self.assertEqual(concat(b'abc', b'def', True), b'abcdef')
         self.assertEqual(concat(b'abc', bytearray(b'def'), True), b'abcdef')
@@ -192,6 +200,7 @@ class CAPITest(unittest.TestCase):
         """Test PyBytes_DecodeEscape()"""
         decodeescape = _testlimitedcapi.bytes_decodeescape
 
+        self.assertEqual(decodeescape(b''), b'')
         self.assertEqual(decodeescape(b'abc'), b'abc')
         self.assertEqual(decodeescape(br'\t\n\r\x0b\x0c\x00\\\'\"'),
                          b'''\t\n\r\v\f\0\\'"''')
@@ -223,26 +232,41 @@ class CAPITest(unittest.TestCase):
 
     def test_resize(self):
         """Test _PyBytes_Resize()"""
-        resize = _testcapi.bytes_resize
+        _resize = _testcapi.bytes_resize
+
+        def resize(obj, size, new):
+            result = _resize(obj, size, new)
+            if 1 <= len(result):
+                if new or size != len(obj):
+                    # gh-156995: Make sure that the result is a fresh object.
+                    # Previously, _PyBytes_Resize(&obj, 1) returned a singleton
+                    # if _PyObject_IsUniquelyReferenced() is false.
+                    self.assertEqual(sys.getrefcount(result), 1)
+                    self.assertFalse(sys._is_immortal(result))
+            else:
+                # check that the result is the empty bytes string singleton
+                self.assertTrue(sys._is_immortal(result))
+            return result
 
         for new in True, False:
-            self.assertEqual(resize(b'abc', 0, new), b'')
-            self.assertEqual(resize(b'abc', 1, new), b'a')
-            self.assertEqual(resize(b'abc', 2, new), b'ab')
-            self.assertEqual(resize(b'abc', 3, new), b'abc')
-            b = resize(b'abc', 4, new)
-            self.assertEqual(len(b), 4)
-            self.assertEqual(b[:3], b'abc')
+            with self.subTest(new=new):
+                self.assertEqual(resize(b'abc', 0, new), b'')
+                self.assertEqual(resize(b'abc', 1, new), b'a')
+                self.assertEqual(resize(b'abc', 2, new), b'ab')
+                self.assertEqual(resize(b'abc', 3, new), b'abc')
+                b = resize(b'abc', 4, new)
+                self.assertEqual(len(b), 4)
+                self.assertEqual(b[:3], b'abc')
 
-            self.assertEqual(resize(b'a', 0, new), b'')
-            self.assertEqual(resize(b'a', 1, new), b'a')
-            b = resize(b'a', 2, new)
-            self.assertEqual(len(b), 2)
-            self.assertEqual(b[:1], b'a')
+                self.assertEqual(resize(b'a', 0, new), b'')
+                self.assertEqual(resize(b'a', 1, new), b'a')
+                b = resize(b'a', 2, new)
+                self.assertEqual(len(b), 2)
+                self.assertEqual(b[:1], b'a')
 
-            self.assertEqual(resize(b'', 0, new), b'')
-            self.assertEqual(len(resize(b'', 1, new)), 1)
-            self.assertEqual(len(resize(b'', 2, new)), 2)
+                self.assertEqual(resize(b'', 0, new), b'')
+                self.assertEqual(len(resize(b'', 1, new)), 1)
+                self.assertEqual(len(resize(b'', 2, new)), 2)
 
         self.assertRaises(SystemError, resize, b'abc', -1, False)
         self.assertRaises(SystemError, resize, bytearray(b'abc'), 3, False)

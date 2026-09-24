@@ -614,7 +614,7 @@ static inline PyObject *
 _Py_XGetRef(PyObject **ptr)
 {
     for (;;) {
-        PyObject *value = _Py_atomic_load_ptr(ptr);
+        PyObject *value = _PyObject_CAST(_Py_atomic_load_ptr(ptr));
         if (value == NULL) {
             return value;
         }
@@ -629,7 +629,7 @@ _Py_XGetRef(PyObject **ptr)
 static inline PyObject *
 _Py_TryXGetRef(PyObject **ptr)
 {
-    PyObject *value = _Py_atomic_load_ptr(ptr);
+    PyObject *value = _PyObject_CAST(_Py_atomic_load_ptr(ptr));
     if (value == NULL) {
         return value;
     }
@@ -875,7 +875,8 @@ static inline int _PyType_SUPPORTS_WEAKREFS(PyTypeObject *type) {
     return (type->tp_weaklistoffset != 0);
 }
 
-extern PyObject* _PyType_AllocNoTrack(PyTypeObject *type, Py_ssize_t nitems);
+// Export for 'array' shared extension.
+PyAPI_FUNC(PyObject*) _PyType_AllocNoTrack(PyTypeObject *type, Py_ssize_t nitems);
 PyAPI_FUNC(PyObject *) _PyType_NewManagedObject(PyTypeObject *type);
 
 extern PyTypeObject* _PyType_CalculateMetaclass(PyTypeObject *, PyObject *);
@@ -896,6 +897,9 @@ extern PyObject *_PyType_LookupRefAndVersion(PyTypeObject *, PyObject *,
 // type->tp_version or zero if name is missing. It doesn't set an exception!
 extern unsigned int
 _PyType_LookupStackRefAndVersion(PyTypeObject *type, PyObject *name, _PyStackRef *out);
+
+extern int _PyObject_GetMethodStackRef(PyThreadState *ts, _PyStackRef *self,
+                                       PyObject *name, _PyStackRef *method);
 
 // Cache the provided init method in the specialization cache of type if the
 // provided type version matches the current version of the type.
@@ -1006,6 +1010,22 @@ enum _PyAnnotateFormat {
     _Py_ANNOTATE_FORMAT_FORWARDREF = 3,
     _Py_ANNOTATE_FORMAT_STRING = 4,
 };
+
+int _PyObject_SetDict(PyObject *obj, PyObject *value);
+
+#ifndef Py_GIL_DISABLED
+static inline Py_ALWAYS_INLINE void _Py_INCREF_MORTAL(PyObject *op)
+{
+    assert(!_Py_IsStaticImmortal(op));
+    op->ob_refcnt++;
+    _Py_INCREF_STAT_INC();
+#if defined(Py_REF_DEBUG) && !defined(Py_LIMITED_API)
+    if (!_Py_IsImmortal(op)) {
+        _Py_INCREF_IncRefTotal();
+    }
+#endif
+}
+#endif
 
 #ifdef __cplusplus
 }

@@ -53,6 +53,14 @@ any codec:
    :exc:`UnicodeDecodeError`). Refer to :ref:`codec-base-classes` for more
    information on codec error handling.
 
+.. function:: charmap_build(string)
+
+   Return a mapping suitable for encoding with a custom single-byte encoding.
+   Given a :class:`str` *string* of up to 256 characters representing a
+   decoding table, returns either a compact internal mapping object
+   ``EncodingMap`` or a :class:`dictionary <dict>` mapping character ordinals
+   to byte values. Raises a :exc:`TypeError` on invalid input.
+
 The full details for each codec can also be looked up directly:
 
 .. function:: lookup(encoding, /)
@@ -235,8 +243,8 @@ wider range of codecs when working with binary files:
 .. function:: iterencode(iterator, encoding, errors='strict', **kwargs)
 
    Uses an incremental encoder to iteratively encode the input provided by
-   *iterator*. This function is a :term:`generator`.
-   The *errors* argument (as well as any
+   *iterator*. *iterator* must yield :class:`str` objects.
+   This function is a :term:`generator`. The *errors* argument (as well as any
    other keyword argument) is passed through to the incremental encoder.
 
    This function requires that the codec accept text :class:`str` objects
@@ -247,14 +255,28 @@ wider range of codecs when working with binary files:
 .. function:: iterdecode(iterator, encoding, errors='strict', **kwargs)
 
    Uses an incremental decoder to iteratively decode the input provided by
-   *iterator*. This function is a :term:`generator`.
-   The *errors* argument (as well as any
+   *iterator*. *iterator* must yield :class:`bytes` objects.
+   This function is a :term:`generator`. The *errors* argument (as well as any
    other keyword argument) is passed through to the incremental decoder.
 
    This function requires that the codec accept :class:`bytes` objects
    to decode. Therefore it does not support text-to-text encoders such as
    ``rot_13``, although ``rot_13`` may be used equivalently with
    :func:`iterencode`.
+
+
+.. function:: readbuffer_encode(buffer, errors=None, /)
+
+   Return a :class:`tuple` containing the raw bytes of *buffer*, a
+   :ref:`buffer-compatible object <bufferobjects>` or :class:`str`
+   (encoded to UTF-8 before processing), and their length in bytes.
+
+   The *errors* argument is ignored.
+
+   .. code-block:: pycon
+
+      >>> codecs.readbuffer_encode(b"Zito")
+      (b'Zito', 4)
 
 
 The module also provides the following constants which are useful for reading
@@ -288,7 +310,7 @@ and writing to platform dependent files:
 Codec Base Classes
 ------------------
 
-The :mod:`codecs` module defines a set of base classes which define the
+The :mod:`!codecs` module defines a set of base classes which define the
 interfaces for working with codec objects, and can also be used as the basis
 for custom codec implementations.
 
@@ -960,17 +982,22 @@ defined in Unicode. A simple and straightforward way that can store each Unicode
 code point, is to store each code point as four consecutive bytes. There are two
 possibilities: store the bytes in big endian or in little endian order. These
 two encodings are called ``UTF-32-BE`` and ``UTF-32-LE`` respectively. Their
-disadvantage is that if e.g. you use ``UTF-32-BE`` on a little endian machine you
-will always have to swap bytes on encoding and decoding. ``UTF-32`` avoids this
-problem: bytes will always be in natural endianness. When these bytes are read
-by a CPU with a different endianness, then bytes have to be swapped though. To
-be able to detect the endianness of a ``UTF-16`` or ``UTF-32`` byte sequence,
-there's the so called BOM ("Byte Order Mark"). This is the Unicode character
-``U+FEFF``. This character can be prepended to every ``UTF-16`` or ``UTF-32``
-byte sequence. The byte swapped version of this character (``0xFFFE``) is an
-illegal character that may not appear in a Unicode text. So when the
-first character in a ``UTF-16`` or ``UTF-32`` byte sequence
-appears to be a ``U+FFFE`` the bytes have to be swapped on decoding.
+disadvantage is that if, for example, you use ``UTF-32-BE`` on a little endian
+machine you will always have to swap bytes on encoding and decoding.
+Python's ``UTF-16`` and ``UTF-32`` codecs avoid this problem by using the
+platform's native byte order when no BOM is present.
+Python follows prevailing platform
+practice, so native-endian data round-trips without redundant byte swapping,
+even though the Unicode Standard defaults to big-endian when the byte order is
+unspecified. When these bytes are read by a CPU with a different endianness,
+the bytes have to be swapped. To be able to detect the endianness of a
+``UTF-16`` or ``UTF-32`` byte sequence, a BOM ("Byte Order Mark") is used.
+This is the Unicode character ``U+FEFF``. This character can be prepended to every
+``UTF-16`` or ``UTF-32`` byte sequence. The byte swapped version of this character
+(``0xFFFE``) is an illegal character that may not appear in a Unicode text.
+When the first character of a ``UTF-16`` or ``UTF-32`` byte sequence is
+``U+FFFE``, the bytes have to be swapped on decoding.
+
 Unfortunately the character ``U+FEFF`` had a second purpose as
 a ``ZERO WIDTH NO-BREAK SPACE``: a character that has no width and doesn't allow
 a word to be split. It can e.g. be used to give hints to a ligature algorithm.
@@ -1043,8 +1070,15 @@ or with dictionaries as mapping tables. The following table lists the codecs by
 name, together with a few common aliases, and the languages for which the
 encoding is likely used. Neither the list of aliases nor the list of languages
 is meant to be exhaustive. Notice that spelling alternatives that only differ in
-case or use a hyphen instead of an underscore are also valid aliases; therefore,
-e.g. ``'utf-8'`` is a valid alias for the ``'utf_8'`` codec.
+case or use a hyphen instead of an underscore are also valid aliases
+because they are equivalent when normalized by
+:func:`~encodings.normalize_encoding`. For example, ``'utf-8'`` is a valid
+alias for the ``'utf_8'`` codec.
+
+.. note::
+
+   The below table lists the most common aliases, for a complete list
+   refer to the source :source:`aliases.py <Lib/encodings/aliases.py>` file.
 
 On Windows, ``cpXXX`` codecs are available for all code pages.
 But only codecs listed in the following table are guarantead to exist on
@@ -1118,7 +1152,7 @@ particular, the following variants typically exist:
 +-----------------+--------------------------------+--------------------------------+
 | cp857           | 857, IBM857                    | Turkish                        |
 +-----------------+--------------------------------+--------------------------------+
-| cp858           | 858, IBM858                    | Western Europe                 |
+| cp858           | 858, IBM00858                  | Western Europe                 |
 +-----------------+--------------------------------+--------------------------------+
 | cp860           | 860, IBM860                    | Portuguese                     |
 +-----------------+--------------------------------+--------------------------------+
@@ -1155,7 +1189,7 @@ particular, the following variants typically exist:
 |                 |                                |                                |
 |                 |                                | .. versionadded:: 3.4          |
 +-----------------+--------------------------------+--------------------------------+
-| cp1140          | ibm1140                        | Western Europe                 |
+| cp1140          | IBM01140                       | Western Europe                 |
 +-----------------+--------------------------------+--------------------------------+
 | cp1250          | windows-1250                   | Central and Eastern Europe     |
 +-----------------+--------------------------------+--------------------------------+
@@ -1222,7 +1256,7 @@ particular, the following variants typically exist:
 +-----------------+--------------------------------+--------------------------------+
 | iso8859_3       | iso-8859-3, latin3, L3         | Esperanto, Maltese             |
 +-----------------+--------------------------------+--------------------------------+
-| iso8859_4       | iso-8859-4, latin4, L4         | Baltic languages               |
+| iso8859_4       | iso-8859-4, latin4, L4         | Northern Europe                |
 +-----------------+--------------------------------+--------------------------------+
 | iso8859_5       | iso-8859-5, cyrillic           | Belarusian, Bulgarian,         |
 |                 |                                | Macedonian, Russian, Serbian   |
@@ -1346,6 +1380,15 @@ encodings.
 |                    |         | :mod:`encodings.idna`.    |
 |                    |         | Only ``errors='strict'``  |
 |                    |         | is supported.             |
+|                    |         |                           |
+|                    |         | .. warning::              |
+|                    |         |                           |
+|                    |         |    This codec builds on   |
+|                    |         |    ``punycode``, whose    |
+|                    |         |    algorithms scale       |
+|                    |         |    poorly, so limit the   |
+|                    |         |    length of untrusted    |
+|                    |         |    input.                 |
 +--------------------+---------+---------------------------+
 | mbcs               | ansi,   | Windows only: Encode the  |
 |                    | dbcs    | operand according to the  |
@@ -1362,6 +1405,14 @@ encodings.
 | punycode           |         | Implement :rfc:`3492`.    |
 |                    |         | Stateful codecs are not   |
 |                    |         | supported.                |
+|                    |         |                           |
+|                    |         | .. warning::              |
+|                    |         |                           |
+|                    |         |    The decoding and       |
+|                    |         |    encoding algorithms    |
+|                    |         |    scale poorly, so       |
+|                    |         |    limit the length of    |
+|                    |         |    untrusted input.       |
 +--------------------+---------+---------------------------+
 | raw_unicode_escape |         | Latin-1 encoding with     |
 |                    |         | :samp:`\\u{XXXX}` and     |
@@ -1373,7 +1424,11 @@ encodings.
 |                    |         | It is used in the Python  |
 |                    |         | pickle protocol.          |
 +--------------------+---------+---------------------------+
-| undefined          |         | Raise an exception for    |
+| undefined          |         | This Codec should only    |
+|                    |         | be used for testing       |
+|                    |         | purposes.                 |
+|                    |         |                           |
+|                    |         | Raise an exception for    |
 |                    |         | all conversions, even     |
 |                    |         | empty strings. The error  |
 |                    |         | handler is ignored.       |
@@ -1450,6 +1505,36 @@ to :class:`bytes` mappings. They are not supported by :meth:`bytes.decode`
    Restoration of the aliases for the binary transforms.
 
 
+.. _standalone-codec-functions:
+
+Standalone Codec Functions
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The following functions provide encoding and decoding functionality similar to codecs,
+but are not available as named codecs through :func:`codecs.encode` or :func:`codecs.decode`.
+They are used internally (for example, by :mod:`pickle`) and behave similarly to the
+``string_escape`` codec that was removed in Python 3.
+
+.. function:: codecs.escape_encode(input, errors=None)
+
+   Encode *input* using escape sequences. Similar to how :func:`repr` on bytes
+   produces escaped byte values.
+
+   *input* must be a :class:`bytes` object.
+
+   Returns a tuple ``(output, length)`` where *output* is a :class:`bytes`
+   object and *length* is the number of bytes consumed.
+
+.. function:: codecs.escape_decode(input, errors=None)
+
+   Decode *input* from escape sequences back to the original bytes.
+
+   *input* must be a :term:`bytes-like object`.
+
+   Returns a tuple ``(output, length)`` where *output* is a :class:`bytes`
+   object and *length* is the number of bytes consumed.
+
+
 .. _text-transforms:
 
 Text Transforms
@@ -1476,8 +1561,68 @@ mapping. It is not supported by :meth:`str.encode` (which only produces
    Restoration of the ``rot13`` alias.
 
 
-:mod:`encodings.idna` --- Internationalized Domain Names in Applications
-------------------------------------------------------------------------
+:mod:`!encodings` --- Encodings package
+---------------------------------------
+
+.. module:: encodings
+   :synopsis: Encodings package
+
+This module implements the following functions:
+
+.. function:: normalize_encoding(encoding)
+
+   Normalize encoding name *encoding*.
+
+   Normalization works as follows: all non-alphanumeric characters except the
+   dot used for Python package names are collapsed and replaced with a single
+   underscore, leading and trailing underscores are removed.
+   For example, ``'  -;#'`` becomes ``'_'``.
+
+   Note that *encoding* should be ASCII only.
+
+
+.. note::
+   The following functions should not be used directly, except for testing
+   purposes; :func:`codecs.lookup` should be used instead.
+
+
+.. function:: search_function(encoding)
+
+   Search for the codec module corresponding to the given encoding name
+   *encoding*.
+
+   This function first normalizes the *encoding* using
+   :func:`normalize_encoding`, then looks for a corresponding alias.
+   It attempts to import a codec module from the encodings package using either
+   the alias or the normalized name. If the module is found and defines a valid
+   ``getregentry()`` function that returns a :class:`codecs.CodecInfo` object,
+   the codec is cached and returned.
+
+   If the codec module defines a ``getaliases()`` function any returned aliases
+   are registered for future use.
+
+
+.. function:: win32_code_page_search_function(encoding)
+
+   Search for a Windows code page encoding *encoding* of the form ``cpXXXX``.
+
+   If the code page is valid and supported, return a :class:`codecs.CodecInfo`
+   object for it.
+
+   .. availability:: Windows.
+
+   .. versionadded:: 3.14
+
+
+This module implements the following exception:
+
+.. exception:: CodecRegistryError
+
+   Raised when a codec is invalid or incompatible.
+
+
+:mod:`!encodings.idna` --- Internationalized Domain Names in Applications
+-------------------------------------------------------------------------
 
 .. module:: encodings.idna
    :synopsis: Internationalized Domain Names implementation
@@ -1487,6 +1632,11 @@ This module implements :rfc:`3490` (Internationalized Domain Names in
 Applications) and :rfc:`3492` (Nameprep: A Stringprep Profile for
 Internationalized Domain Names (IDN)). It builds upon the ``punycode`` encoding
 and :mod:`stringprep`.
+
+.. warning::
+
+   This module builds on ``punycode``, whose algorithms scale poorly, so limit
+   the length of untrusted input.
 
 If you need the IDNA 2008 standard from :rfc:`5891` and :rfc:`5895`, use the
 third-party :pypi:`idna` module.
@@ -1519,7 +1669,7 @@ When receiving host names from the wire (such as in reverse name lookup), no
 automatic conversion to Unicode is performed: applications wishing to present
 such host names to the user should decode them to Unicode.
 
-The module :mod:`encodings.idna` also implements the nameprep procedure, which
+The module :mod:`!encodings.idna` also implements the nameprep procedure, which
 performs certain normalizations on host names, to achieve case-insensitivity of
 international domain names, and to unify similar characters. The nameprep
 functions can be used directly if desired.
@@ -1542,8 +1692,8 @@ functions can be used directly if desired.
    Convert a label to Unicode, as specified in :rfc:`3490`.
 
 
-:mod:`encodings.mbcs` --- Windows ANSI codepage
------------------------------------------------
+:mod:`!encodings.mbcs` --- Windows ANSI codepage
+------------------------------------------------
 
 .. module:: encodings.mbcs
    :synopsis: Windows ANSI codepage
@@ -1560,8 +1710,8 @@ This module implements the ANSI codepage (CP_ACP).
    Support any error handler.
 
 
-:mod:`encodings.utf_8_sig` --- UTF-8 codec with BOM signature
--------------------------------------------------------------
+:mod:`!encodings.utf_8_sig` --- UTF-8 codec with BOM signature
+--------------------------------------------------------------
 
 .. module:: encodings.utf_8_sig
    :synopsis: UTF-8 codec with BOM signature

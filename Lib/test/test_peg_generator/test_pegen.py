@@ -91,10 +91,8 @@ class TestPegen(unittest.TestCase):
         """
         rules = parse_string(grammar, GrammarParser).rules
         self.assertEqual(str(rules["start"]), "start: ','.thing+ NEWLINE")
-        self.assertTrue(
-            repr(rules["start"]).startswith(
-                "Rule('start', None, Rhs([Alt([NamedItem(None, Gather(StringLeaf(\"','\"), NameLeaf('thing'"
-            )
+        self.assertStartsWith(repr(rules["start"]),
+            "Rule('start', None, Rhs([Alt([NamedItem(None, Gather(StringLeaf(\"','\"), NameLeaf('thing'"
         )
         self.assertEqual(str(rules["thing"]), "thing: NUMBER")
         parser_class = make_parser(grammar)
@@ -757,6 +755,30 @@ class TestPegen(unittest.TestCase):
             ],
         )
 
+    def test_cut_is_local_in_rule(self) -> None:
+        grammar = """
+        start:
+            | inner
+            | 'x' { "ok" }
+        inner:
+            | 'x' ~ 'y'
+            | 'x'
+        """
+        parser_class = make_parser(grammar)
+        node = parse_string("x", parser_class)
+        self.assertEqual(node, 'ok')
+
+    def test_cut_is_local_in_parens(self) -> None:
+        # we currently don't guarantee this behavior, see gh-143054
+        grammar = """
+        start:
+            | ('x' ~ 'y' | 'x')
+            | 'x' { "ok" }
+        """
+        parser_class = make_parser(grammar)
+        node = parse_string("x", parser_class)
+        self.assertEqual(node, 'ok')
+
     def test_dangling_reference(self) -> None:
         grammar = """
         start: foo ENDMARKER
@@ -825,6 +847,49 @@ class TestPegen(unittest.TestCase):
         )
         with self.assertRaises(SyntaxError):
             parse_string("test 1", parser_class)
+
+    def test_keyword_aliases(self) -> None:
+        grammar = """
+        @keyword_aliases "{'if': 'если', 'match': ('сопоставить', 'выбор')}"
+        start:
+            | 'if' n=NAME { ('if', n.string) }
+            | "match" n=NAME { ('match', n.string) }
+            | n=NAME { ('name', n.string) }
+        """
+        parser_class = make_parser(grammar)
+        self.assertEqual(parse_string("if x", parser_class), ('if', 'x'))
+        self.assertEqual(parse_string("если x", parser_class), ('if', 'x'))
+        self.assertEqual(parse_string("match x", parser_class), ('match', 'x'))
+        self.assertEqual(parse_string("сопоставить x", parser_class), ('match', 'x'))
+        self.assertEqual(parse_string("выбор x", parser_class), ('match', 'x'))
+        # An alias of a soft keyword can be used as a name, unlike
+        # an alias of a keyword.
+        self.assertEqual(parse_string("выбор", parser_class), ('name', 'выбор'))
+        self.assertEqual(parse_string("match выбор", parser_class), ('match', 'выбор'))
+        with self.assertRaises(SyntaxError):
+            parse_string("если", parser_class)
+        with self.assertRaises(SyntaxError):
+            parse_string("if если", parser_class)
+
+    def test_invalid_keyword_aliases(self) -> None:
+        for aliases, message in [
+            ("{'if': ", "Invalid @keyword_aliases"),
+            ("['if', 'если']", "must be a dict literal"),
+            ("{'else': 'иначе'}", "Cannot alias 'else'"),
+            ("{'if': 'если', 'если': 'коли'}", "Cannot alias 'если'"),
+            ("{'if': 'match'}", "'match' is already a keyword"),
+            ("{'if': 'если', 'match': 'если'}", "'если' is already a keyword"),
+            ("{'if': 'если если'}", "not an NFKC-normalized identifier"),
+            ("{'if': '\\ufb01'}", "not an NFKC-normalized identifier"),
+            ("{'if': 1}", "not an NFKC-normalized identifier"),
+        ]:
+            with self.subTest(aliases=aliases):
+                grammar = f"""
+                @keyword_aliases "{aliases}"
+                start: 'if' "match" NAME
+                """
+                with self.assertRaisesRegex(GrammarError, message):
+                    make_parser(grammar)
 
     def test_forced(self) -> None:
         grammar = """

@@ -61,7 +61,7 @@ if you are using a rare "FIPS compliant" build of Python.
 These correspond to :data:`algorithms_guaranteed`.
 
 Additional algorithms may also be available if your Python distribution's
-:mod:`hashlib` was linked against a build of OpenSSL that provides others.
+:mod:`!hashlib` was linked against a build of OpenSSL that provides others.
 Others *are not guaranteed available* on all installations and will only be
 accessible by name via :func:`new`.  See :data:`algorithms_available`.
 
@@ -284,7 +284,7 @@ a file or file-like object.
    Example:
 
       >>> import io, hashlib, hmac
-      >>> with open(hashlib.__file__, "rb") as f:
+      >>> with open("library/hashlib.rst", "rb") as f:
       ...     digest = hashlib.file_digest(f, "sha256")
       ...
       >>> digest.hexdigest()  # doctest: +ELLIPSIS
@@ -303,7 +303,7 @@ a file or file-like object.
    .. versionadded:: 3.11
 
    .. versionchanged:: 3.14
-      Now raises a :exc:`BlockingIOError` if the file is opened in blocking
+      Now raises a :exc:`BlockingIOError` if the file is opened in non-blocking
       mode. Previously, spurious null bytes were added to the digest.
 
 
@@ -390,7 +390,7 @@ BLAKE2 supports **keyed mode** (a faster and simpler replacement for HMAC_),
 **salted hashing**, **personalization**, and **tree hashing**.
 
 Hash objects from this module follow the API of standard library's
-:mod:`hashlib` objects.
+:mod:`!hashlib` objects.
 
 
 Creating hash objects

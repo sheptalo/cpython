@@ -62,6 +62,7 @@ import importlib.machinery
 import importlib.util
 import inspect
 import io
+import keyword
 import os
 import pkgutil
 import platform
@@ -71,7 +72,6 @@ import sysconfig
 import textwrap
 import time
 import tokenize
-import urllib.parse
 import warnings
 from annotationlib import Format
 from collections import deque
@@ -579,10 +579,20 @@ class Doc:
              (file.startswith(basedir) and
               not file.startswith(os.path.join(basedir, 'site-packages')))) and
             object.__name__ not in ('xml.etree', 'test.test_pydoc.pydoc_mod')):
-            if docloc.startswith(("http://", "https://")):
-                docloc = "{}/{}.html".format(docloc.rstrip("/"), object.__name__.lower())
+
+            try:
+                from pydoc_data import module_docs
+            except ImportError:
+                module_docs = None
+
+            if module_docs and object.__name__ in module_docs.module_docs:
+                doc_name = module_docs.module_docs[object.__name__]
+                if docloc.startswith(("http://", "https://")):
+                    docloc = "{}/{}".format(docloc.rstrip("/"), doc_name)
+                else:
+                    docloc = os.path.join(docloc, doc_name)
             else:
-                docloc = os.path.join(docloc, object.__name__.lower() + ".html")
+                docloc = None
         else:
             docloc = None
         return docloc
@@ -841,7 +851,8 @@ class HTMLDoc(Doc):
         head = '<strong class="title">%s</strong>' % linkedname
         try:
             path = inspect.getabsfile(object)
-            url = urllib.parse.quote(path)
+            import urllib.request
+            url = urllib.request.pathname2url(path)
             filelink = self.filelink(url, path)
         except TypeError:
             filelink = '(built-in)'
@@ -884,6 +895,7 @@ class HTMLDoc(Doc):
         for key, value in inspect.getmembers(object, inspect.isroutine):
             # if __all__ exists, believe it.  Otherwise use a heuristic.
             if (all is not None
+                or inspect.isbuiltin(value)
                 or (inspect.getmodule(value) or object) is object):
                 if visiblename(key, all, object):
                     funcs.append((key, value))
@@ -1328,6 +1340,7 @@ location listed above.
         for key, value in inspect.getmembers(object, inspect.isroutine):
             # if __all__ exists, believe it.  Otherwise use a heuristic.
             if (all is not None
+                or inspect.isbuiltin(value)
                 or (inspect.getmodule(value) or object) is object):
                 if visiblename(key, all, object):
                     funcs.append((key, value))
@@ -1799,7 +1812,8 @@ def writedoc(thing, forceload=0):
     """Write HTML documentation to a file in the current directory."""
     object, name = resolve(thing, forceload)
     page = html.page(describe(object), html.document(object, name))
-    with open(name + '.html', 'w', encoding='utf-8') as file:
+    with open(name + '.html', 'w', encoding='utf-8',
+              errors='backslashreplace') as file:
         file.write(page)
     print('wrote', name + '.html')
 
@@ -1864,6 +1878,7 @@ class Helper:
         'async': ('async', ''),
         'await': ('await', ''),
         'break': ('break', 'while for'),
+        'case': 'match',
         'class': ('class', 'CLASSES SPECIALMETHODS'),
         'continue': ('continue', 'while for'),
         'def': ('function', ''),
@@ -1875,11 +1890,12 @@ class Helper:
         'for': ('for', 'break continue while'),
         'from': 'import',
         'global': ('global', 'nonlocal NAMESPACES'),
-        'if': ('if', 'TRUTHVALUE'),
+        'if': ('if', 'TRUTHVALUE match'),
         'import': ('import', 'MODULES'),
         'in': ('in', 'SEQUENCEMETHODS'),
         'is': 'COMPARISON',
         'lambda': ('lambda', 'FUNCTIONS'),
+        'match': ('match', 'if'),
         'nonlocal': ('nonlocal', 'global NAMESPACES'),
         'not': 'BOOLEAN',
         'or': 'BOOLEAN',
@@ -2060,10 +2076,11 @@ has the same effect as typing a particular string at the help> prompt.
         while True:
             try:
                 request = self.getline('help> ')
-                if not request: break
             except (KeyboardInterrupt, EOFError):
                 break
             request = request.strip()
+            if not request:
+                continue  # back to the prompt
 
             # Make sure significant trailing quoting marks of literals don't
             # get deleted while cleaning input
@@ -2095,7 +2112,7 @@ has the same effect as typing a particular string at the help> prompt.
             elif request[:8] == 'modules ':
                 self.listmodules(request.split()[1])
             elif request in self.symbols: self.showsymbol(request)
-            elif request in ['True', 'False', 'None']:
+            elif keyword.kwaliases.get(request, request) in ['True', 'False', 'None']:
                 # special case these keywords since they are objects too
                 doc(eval(request), 'Help on %s:', output=self._output, is_cli=is_cli)
             elif request in self.keywords: self.showtopic(request)
@@ -2110,7 +2127,7 @@ has the same effect as typing a particular string at the help> prompt.
         self.output.write(_introdoc())
 
     def list(self, items, columns=4, width=80):
-        items = list(sorted(items))
+        items = sorted(items)
         colw = width // columns
         rows = (len(items) + columns - 1) // columns
         for row in range(rows):
@@ -2142,7 +2159,7 @@ to. Enter any symbol to get more help.
 Here is a list of available topics.  Enter any topic name to get more help.
 
 ''')
-        self.list(self.topics.keys())
+        self.list(self.topics.keys(), columns=3)
 
     def showtopic(self, topic, more_xrefs=''):
         try:
@@ -2239,6 +2256,10 @@ Please wait a moment while I gather a list of all available modules...
 Enter any module name to get more help.  Or, type "modules spam" to search
 for modules whose name or summary contain the string "spam".
 ''')
+
+# Aliases of keywords (like 'вернуть' for 'return') refer to their keyword.
+Helper.keywords.update({alias: kw for alias, kw in keyword.kwaliases.items()
+                        if kw in Helper.keywords})
 
 help = Helper()
 
@@ -2394,7 +2415,7 @@ def _start_server(urlhandler, hostname, port):
             self.send_header('Content-Type', '%s; charset=UTF-8' % content_type)
             self.end_headers()
             self.wfile.write(self.urlhandler(
-                self.path, content_type).encode('utf-8'))
+                self.path, content_type).encode('utf-8', 'backslashreplace'))
 
         def log_message(self, *args):
             # Don't log messages.
@@ -2604,7 +2625,9 @@ def _url_handler(url, content_type="text/html"):
         names = sorted(Helper.keywords.keys())
 
         def bltinlink(name):
-            return '<a href="topic?key=%s">%s</a>' % (name, name)
+            # Link aliases to the page of their keyword to keep URLs ASCII.
+            return '<a href="topic?key=%s">%s</a>' % (
+                keyword.kwaliases.get(name, name), name)
 
         contents = html.multicolumn(names, bltinlink)
         contents = heading + html.bigsection(

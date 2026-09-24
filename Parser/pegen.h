@@ -50,6 +50,11 @@ typedef struct {
     int type;
 } KeywordToken;
 
+typedef struct {
+    const char *alias;
+    const char *keyword;
+} KeywordAlias;
+
 
 typedef struct {
     struct {
@@ -75,6 +80,7 @@ typedef struct {
     PyArena *arena;
     KeywordToken **keywords;
     char **soft_keywords;
+    KeywordAlias *soft_keyword_aliases;
     int n_keyword_lists;
     int start_rule;
     int *errcode;
@@ -145,10 +151,11 @@ int _PyPegen_insert_memo(Parser *p, int mark, int type, void *node);
 int _PyPegen_update_memo(Parser *p, int mark, int type, void *node);
 int _PyPegen_is_memoized(Parser *p, int type, void *pres);
 
-int _PyPegen_lookahead_with_name(int, expr_ty (func)(Parser *), Parser *);
-int _PyPegen_lookahead_with_int(int, Token *(func)(Parser *, int), Parser *, int);
-int _PyPegen_lookahead_with_string(int , expr_ty (func)(Parser *, const char*), Parser *, const char*);
 int _PyPegen_lookahead(int, void *(func)(Parser *), Parser *);
+int _PyPegen_lookahead_for_expr(int, expr_ty (func)(Parser *), Parser *);
+int _PyPegen_lookahead_for_stmt(int, stmt_ty (func)(Parser *), Parser *);
+int _PyPegen_lookahead_with_int(int, Token *(func)(Parser *, int), Parser *, int);
+int _PyPegen_lookahead_with_string(int, expr_ty (func)(Parser *, const char*), Parser *, const char*);
 
 Token *_PyPegen_expect_token(Parser *p, int type);
 void* _PyPegen_expect_forced_result(Parser *p, void* result, const char* expected);
@@ -174,7 +181,6 @@ typedef enum {
 } TARGETS_TYPE;
 
 int _Pypegen_raise_decode_error(Parser *p);
-void _PyPegen_raise_tokenizer_init_error(PyObject *filename);
 int _Pypegen_tokenizer_error(Parser *p);
 void *_PyPegen_raise_error(Parser *p, PyObject *errtype, int use_mark, const char *errmsg, ...);
 void *_PyPegen_raise_error_known_location(Parser *p, PyObject *errtype,
@@ -350,6 +356,7 @@ expr_ty _PyPegen_collect_call_seqs(Parser *, asdl_expr_seq *, asdl_seq *,
 expr_ty _PyPegen_constant_from_token(Parser* p, Token* tok);
 expr_ty _PyPegen_decoded_constant_from_token(Parser* p, Token* tok);
 expr_ty _PyPegen_constant_from_string(Parser* p, Token* tok);
+expr_ty _PyPegen_concatenate_tstrings(Parser *p, asdl_expr_seq *, int, int, int, int, PyArena *);
 expr_ty _PyPegen_concatenate_strings(Parser *p, asdl_expr_seq *, int, int, int, int, PyArena *);
 expr_ty _PyPegen_FetchRawForm(Parser *p, int, int, int, int);
 expr_ty _PyPegen_ensure_imaginary(Parser *p, expr_ty);

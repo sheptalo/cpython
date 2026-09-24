@@ -73,7 +73,7 @@ Object Protocol
 
    Flag to be used with multiple functions that print the object (like
    :c:func:`PyObject_Print` and :c:func:`PyFile_WriteObject`).
-   If passed, these function would use the :func:`str` of the object
+   If passed, these functions use the :func:`str` of the object
    instead of the :func:`repr`.
 
 
@@ -319,6 +319,8 @@ Object Protocol
    representation on success, ``NULL`` on failure.  This is the equivalent of the
    Python expression ``repr(o)``.  Called by the :func:`repr` built-in function.
 
+   If argument is ``NULL``, return the string ``'<NULL>'``.
+
    .. versionchanged:: 3.4
       This function now includes a debug assertion to help ensure that it
       does not silently discard an active exception.
@@ -333,6 +335,8 @@ Object Protocol
    a string similar to that returned by :c:func:`PyObject_Repr` in Python 2.
    Called by the :func:`ascii` built-in function.
 
+   If argument is ``NULL``, return the string ``'<NULL>'``.
+
    .. index:: string; PyObject_Str (C function)
 
 
@@ -342,6 +346,8 @@ Object Protocol
    representation on success, ``NULL`` on failure.  This is the equivalent of the
    Python expression ``str(o)``.  Called by the :func:`str` built-in function
    and, therefore, by the :func:`print` function.
+
+   If argument is ``NULL``, return the string ``'<NULL>'``.
 
    .. versionchanged:: 3.4
       This function now includes a debug assertion to help ensure that it
@@ -357,6 +363,8 @@ Object Protocol
    expression ``bytes(o)``, when *o* is not an integer.  Unlike ``bytes(o)``,
    a TypeError is raised when *o* is an integer instead of a zero-initialized
    bytes object.
+
+   If argument is ``NULL``, return the :class:`bytes` object ``b'<NULL>'``.
 
 
 .. c:function:: int PyObject_IsSubclass(PyObject *derived, PyObject *cls)
@@ -585,7 +593,7 @@ Object Protocol
 
    Clear the managed dictionary of *obj*.
 
-   This function must only be called in a traverse function of the type which
+   This function must only be called in a clear function of the type which
    has the :c:macro:`Py_TPFLAGS_MANAGED_DICT` flag set.
 
    .. versionadded:: 3.13
@@ -596,12 +604,13 @@ Object Protocol
    if supported by the runtime.  In the :term:`free-threaded <free threading>` build,
    this allows the interpreter to avoid reference count adjustments to *obj*,
    which may improve multi-threaded performance.  The tradeoff is
-   that *obj* will only be deallocated by the tracing garbage collector.
+   that *obj* will only be deallocated by the tracing garbage collector, and
+   not when the interpreter no longer has any references to it.
 
-   This function returns ``1`` if deferred reference counting is enabled on *obj*
-   (including when it was enabled before the call),
+   This function returns ``1`` if deferred reference counting is enabled on *obj*,
    and ``0`` if deferred reference counting is not supported or if the hint was
-   ignored by the runtime. This function is thread-safe, and cannot fail.
+   ignored by the interpreter, such as when deferred reference counting is already
+   enabled on *obj*. This function is thread-safe, and cannot fail.
 
    This function does nothing on builds with the :term:`GIL` enabled, which do
    not support deferred reference counting. This also does nothing if *obj* is not
@@ -609,7 +618,8 @@ Object Protocol
    :c:func:`PyObject_GC_IsTracked`).
 
    This function is intended to be used soon after *obj* is created,
-   by the code that creates it.
+   by the code that creates it, such as in the object's :c:member:`~PyTypeObject.tp_new`
+   slot.
 
    .. versionadded:: 3.14
 
@@ -665,10 +675,10 @@ Object Protocol
 
    :c:func:`PyUnstable_EnableTryIncRef` must have been called
    earlier on *obj* or this function may spuriously return ``0`` in the
-   :term:`free threading` build.
+   :term:`free-threaded build`.
 
    This function is logically equivalent to the following C code, except that
-   it behaves atomically in the :term:`free threading` build::
+   it behaves atomically in the :term:`free-threaded build`::
 
       if (Py_REFCNT(op) > 0) {
          Py_INCREF(op);
@@ -745,10 +755,10 @@ Object Protocol
    On GIL-enabled builds, this function is equivalent to
    :c:expr:`Py_REFCNT(op) == 1`.
 
-   On a :term:`free threaded <free threading>` build, this checks if *op*'s
+   On a :term:`free-threaded build`, this checks if *op*'s
    :term:`reference count` is equal to one and additionally checks if *op*
    is only used by this thread. :c:expr:`Py_REFCNT(op) == 1` is **not**
-   thread-safe on free threaded builds; prefer this function.
+   thread-safe on free-threaded builds; prefer this function.
 
    The caller must hold an :term:`attached thread state`, despite the fact
    that this function doesn't call into the Python interpreter. This function

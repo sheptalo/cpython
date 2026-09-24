@@ -186,7 +186,7 @@ class _TLSContentType:
 class _TLSAlertType:
     """Alert types for TLSContentType.ALERT messages
 
-    See RFC 8466, section B.2
+    See RFC 8446, section B.2
     """
     CLOSE_NOTIFY = 0
     UNEXPECTED_MESSAGE = 10
@@ -755,6 +755,8 @@ def _create_unverified_context(protocol=None, *, cert_reqs=CERT_NONE,
         raise ValueError(purpose)
 
     context = SSLContext(protocol)
+    # Setting verify_mode to CERT_NONE fails while check_hostname is
+    # enabled, so assign check_hostname first (gh-114905).
     context.check_hostname = check_hostname
     if cert_reqs is not None:
         context.verify_mode = cert_reqs

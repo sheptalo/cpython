@@ -412,10 +412,14 @@ class CAPITest(unittest.TestCase):
             L = MyList((L,))
 
     @support.requires_resource('cpu')
+    @support.skip_emscripten_stack_overflow()
+    @support.skip_wasi_stack_overflow()
     def test_trashcan_python_class1(self):
         self.do_test_trashcan_python_class(list)
 
     @support.requires_resource('cpu')
+    @support.skip_emscripten_stack_overflow()
+    @support.skip_wasi_stack_overflow()
     def test_trashcan_python_class2(self):
         from _testcapi import MyList
         self.do_test_trashcan_python_class(MyList)
@@ -910,6 +914,18 @@ class CAPITest(unittest.TestCase):
         def genf(): yield
         gen = genf()
         self.assertEqual(_testcapi.gen_get_code(gen), gen.gi_code)
+
+    def test_tp_bases_slot(self):
+        cls = _testcapi.HeapCTypeWithBasesSlot
+        self.assertEqual(cls.__bases__, (int,))
+        self.assertEqual(cls.__base__, int)
+
+    def test_tp_bases_slot_none(self):
+        self.assertRaisesRegex(
+            SystemError,
+            "Py_tp_bases is not a tuple",
+            _testcapi.create_heapctype_with_none_bases_slot
+        )
 
 
 @requires_limited_api

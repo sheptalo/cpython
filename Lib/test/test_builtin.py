@@ -293,6 +293,27 @@ class BuiltinTest(ComplexesAreIdenticalMixin, unittest.TestCase):
         self.assertEqual(overridden_outputs, ['all', 'any', 'tuple'])
 
 
+    def test_builtin_call_async_genexpr_no_crash(self):
+        async def f_all():
+            return all(await 2 for _ in [])
+
+        async def f_any():
+            return any(await 2 for _ in [])
+
+        async def f_tuple():
+            return tuple(await 2 for _ in [])
+
+        async def f_list():
+            return list(await 2 for _ in [])
+
+        async def f_set():
+            return set(await 2 for _ in [])
+
+        for f in (f_all, f_any, f_tuple, f_list, f_set):
+            with self.subTest(func=f.__name__):
+                with self.assertRaises(TypeError):
+                    run_yielding_async_fn(f)
+
     def test_ascii(self):
         self.assertEqual(ascii(''), '\'\'')
         self.assertEqual(ascii(0), '0')
@@ -393,7 +414,7 @@ class BuiltinTest(ComplexesAreIdenticalMixin, unittest.TestCase):
         self.assertRaises(ValueError, chr, -2**1000)
 
     def test_cmp(self):
-        self.assertTrue(not hasattr(builtins, "cmp"))
+        self.assertNotHasAttr(builtins, "cmp")
 
     def test_compile(self):
         compile('print(1)\n', '', 'exec')
@@ -436,7 +457,7 @@ class BuiltinTest(ComplexesAreIdenticalMixin, unittest.TestCase):
             # test both direct compilation and compilation via AST
                 codeobjs = []
                 codeobjs.append(compile(codestr, "<test>", "exec", optimize=optval))
-                tree = ast.parse(codestr)
+                tree = ast.parse(codestr, optimize=optval)
                 codeobjs.append(compile(tree, "<test>", "exec", optimize=optval))
                 for code in codeobjs:
                     ns = {}
@@ -506,6 +527,10 @@ class BuiltinTest(ComplexesAreIdenticalMixin, unittest.TestCase):
             '''a = [x async for x in (x async for x in arange(5))][1]''',
             '''a, = [1 for x in {x async for x in arange(1)}]''',
             '''a = [await sleep(0, x) async for x in arange(2)][1]''',
+            '''a = [await sleep(0, 1) for _ in [0]][0]''',
+            '''a = {await sleep(0, 1) for _ in [0]}.pop()''',
+            '''a = {0: await sleep(0, 1) for _ in [0]}[0]''',
+            '''a = (lambda x=[await sleep(0, 1) for _ in [0]]: x)()[0]''',
             # gh-121637: Make sure we correctly handle the case where the
             # async code is optimized away
             '''assert not await sleep(0); a = 1''',
@@ -574,7 +599,26 @@ class BuiltinTest(ComplexesAreIdenticalMixin, unittest.TestCase):
             '''def f():
                    async with Lock() as l:
                        a = 1
-            '''
+            ''',
+            '''class C:
+                   [await x for x in y]
+            ''',
+            '''class C:
+                   [x async for x in arange(10)]
+            ''',
+            '''async def f():
+                   class C:
+                       [await x for x in y]
+            ''',
+            '''lambda: [await x for x in y]''',
+            '''class C:
+                   def f(self, x=[await y for y in z]):
+                       pass
+            ''',
+            '''type T = [await x for x in y]''',
+            '''async def f[T=[await x for x in y]]():
+                   pass
+            ''',
         ]
         for mode, code_sample in product(modes, code_samples):
             source = dedent(code_sample)
@@ -624,7 +668,7 @@ class BuiltinTest(ComplexesAreIdenticalMixin, unittest.TestCase):
         for opt in [opt1, opt2]:
             opt_right = opt.value.right
             self.assertIsInstance(opt_right, ast.Constant)
-            self.assertEqual(opt_right.value, True)
+            self.assertEqual(opt_right.value, __debug__)
 
     def test_delattr(self):
         sys.spam = 1
@@ -1120,6 +1164,7 @@ class BuiltinTest(ComplexesAreIdenticalMixin, unittest.TestCase):
             self.check_iter_pickle(f1, list(f2), proto)
 
     @support.skip_wasi_stack_overflow()
+    @support.skip_emscripten_stack_overflow()
     @support.requires_resource('cpu')
     def test_filter_dealloc(self):
         # Tests recursive deallocation of nested filter objects using the
@@ -1181,6 +1226,16 @@ class BuiltinTest(ComplexesAreIdenticalMixin, unittest.TestCase):
             def __hash__(self):
                 return self
         self.assertEqual(hash(Z(42)), hash(42))
+
+    def test_invalid_hash_typeerror(self):
+        # GH-140406: The returned object from __hash__() would leak if it
+        # wasn't an integer.
+        class A:
+            def __hash__(self):
+                return 1.0
+
+        with self.assertRaises(TypeError):
+            hash(A())
 
     def test_hex(self):
         self.assertEqual(hex(16), '0x10')
@@ -1372,6 +1427,22 @@ class BuiltinTest(ComplexesAreIdenticalMixin, unittest.TestCase):
                           map(pack, (1, 2), 'abc', strict=True))
         self.assertRaises(ValueError, tuple,
                           map(pack, (1, 2), (1, 2), 'abc', strict=True))
+
+        # gh-140517: Testing refleaks with mortal objects.
+        t1 = (None, object())
+        t2 = (object(), object())
+        t3 = (object(),)
+
+        self.assertRaises(ValueError, tuple,
+                          map(pack, t1, 'a', strict=True))
+        self.assertRaises(ValueError, tuple,
+                          map(pack, t1, t2, 'a', strict=True))
+        self.assertRaises(ValueError, tuple,
+                          map(pack, t1, t2, t3, strict=True))
+        self.assertRaises(ValueError, tuple,
+                          map(pack, 'a', t1, strict=True))
+        self.assertRaises(ValueError, tuple,
+                          map(pack, 'a', t2, t3, strict=True))
 
     def test_map_strict_iterators(self):
         x = iter(range(5))
@@ -2303,7 +2374,7 @@ class BuiltinTest(ComplexesAreIdenticalMixin, unittest.TestCase):
         # tests for object.__format__ really belong elsewhere, but
         #  there's no good place to put them
         x = object().__format__('')
-        self.assertTrue(x.startswith('<object object at'))
+        self.assertStartsWith(x, '<object object at')
 
         # first argument to object.__format__ must be string
         self.assertRaises(TypeError, object().__format__, 3)
@@ -2990,7 +3061,8 @@ class TestType(unittest.TestCase):
 
 def load_tests(loader, tests, pattern):
     from doctest import DocTestSuite
-    tests.addTest(DocTestSuite(builtins))
+    if sys.float_repr_style == 'short':
+        tests.addTest(DocTestSuite(builtins))
     return tests
 
 if __name__ == "__main__":

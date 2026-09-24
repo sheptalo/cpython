@@ -50,12 +50,6 @@
 /* Define if getpgrp() must be called as getpgrp(0). */
 #undef GETPGRP_HAVE_ARG
 
-/* HACL* library can compile SIMD128 implementations */
-#undef HACL_CAN_COMPILE_SIMD128
-
-/* HACL* library can compile SIMD256 implementations */
-#undef HACL_CAN_COMPILE_SIMD256
-
 /* Define if you have the 'accept' function. */
 #undef HAVE_ACCEPT
 
@@ -192,8 +186,14 @@
 /* Define if you have the 'ctermid_r' function. */
 #undef HAVE_CTERMID_R
 
+/* Define if you have the 'ESCDELAY' variable. */
+#undef HAVE_CURSES_ESCDELAY
+
 /* Define if you have the 'filter' function. */
 #undef HAVE_CURSES_FILTER
+
+/* Define if you have the 'getmouse' function with the X/Open signature. */
+#undef HAVE_CURSES_GETMOUSE
 
 /* Define to 1 if you have the <curses.h> header file. */
 #undef HAVE_CURSES_H
@@ -216,8 +216,17 @@
 /* Define if you have the 'resize_term' function. */
 #undef HAVE_CURSES_RESIZE_TERM
 
+/* Define if you have the 'set_escdelay' function. */
+#undef HAVE_CURSES_SET_ESCDELAY
+
+/* Define if you have the 'set_tabsize' function. */
+#undef HAVE_CURSES_SET_TABSIZE
+
 /* Define if you have the 'syncok' function. */
 #undef HAVE_CURSES_SYNCOK
+
+/* Define if you have the 'TABSIZE' variable. */
+#undef HAVE_CURSES_TABSIZE
 
 /* Define if you have the 'typeahead' function. */
 #undef HAVE_CURSES_TYPEAHEAD
@@ -267,6 +276,10 @@
    */
 #undef HAVE_DECL_TZNAME
 
+/* Define to 1 if you have the declaration of 'UT_NAMESIZE', and to 0 if you
+   don't. */
+#undef HAVE_DECL_UT_NAMESIZE
+
 /* Define to 1 if you have the device macros. */
 #undef HAVE_DEVICE_MACROS
 
@@ -300,6 +313,9 @@
 
 /* Define to 1 if you have the 'dlopen' function. */
 #undef HAVE_DLOPEN
+
+/* Define to 1 if you have the 'dl_iterate_phdr' function. */
+#undef HAVE_DL_ITERATE_PHDR
 
 /* Define to 1 if you have the 'dup' function. */
 #undef HAVE_DUP
@@ -538,6 +554,9 @@
 
 /* Define to 1 if you have the 'getlogin' function. */
 #undef HAVE_GETLOGIN
+
+/* Define to 1 if you have the 'getlogin_r' function. */
+#undef HAVE_GETLOGIN_R
 
 /* Define to 1 if you have the 'getnameinfo' function. */
 #undef HAVE_GETNAMEINFO
@@ -806,6 +825,9 @@
 
 /* Define this if you have the makedev macro. */
 #undef HAVE_MAKEDEV
+
+/* Define if you have the 'MAXLOGNAME' constant. */
+#undef HAVE_MAXLOGNAME
 
 /* Define to 1 if you have the 'mbrtowc' function. */
 #undef HAVE_MBRTOWC
@@ -1350,6 +1372,9 @@
 /* Define to 1 if you have the 'sysconf' function. */
 #undef HAVE_SYSCONF
 
+/* Define to 1 if you have the 'sysctlbyname' function. */
+#undef HAVE_SYSCTLBYNAME
+
 /* Define to 1 if you have the <sysexits.h> header file. */
 #undef HAVE_SYSEXITS_H
 
@@ -1453,6 +1478,9 @@
 
 /* Define to 1 if you have the <sys/syscall.h> header file. */
 #undef HAVE_SYS_SYSCALL_H
+
+/* Define to 1 if you have the <sys/sysctl.h> header file. */
+#undef HAVE_SYS_SYSCTL_H
 
 /* Define to 1 if you have the <sys/sysmacros.h> header file. */
 #undef HAVE_SYS_SYSMACROS_H
@@ -1575,6 +1603,9 @@
 /* Define to 1 if you have the <utmp.h> header file. */
 #undef HAVE_UTMP_H
 
+/* Define if you have the 'HAVE_UT_NAMESIZE' constant. */
+#undef HAVE_UT_NAMESIZE
+
 /* Define to 1 if you have the 'uuid_create' function. */
 #undef HAVE_UUID_CREATE
 
@@ -1583,6 +1614,9 @@
 
 /* Define if uuid_generate_time_safe() exists. */
 #undef HAVE_UUID_GENERATE_TIME_SAFE
+
+/* Define if uuid_generate_time_safe() is able to deduce a MAC address. */
+#undef HAVE_UUID_GENERATE_TIME_SAFE_STABLE_MAC
 
 /* Define to 1 if you have the <uuid.h> header file. */
 #undef HAVE_UUID_H
@@ -1720,18 +1754,12 @@
 /* Defined if Python is built as a shared library. */
 #undef Py_ENABLE_SHARED
 
-/* Defined if _Complex C type can be used with libffi. */
-#undef Py_FFI_SUPPORT_C_COMPLEX
-
 /* Define if you want to disable the GIL */
 #undef Py_GIL_DISABLED
 
 /* Define hash algorithm for str, bytes and memoryview. SipHash24: 1, FNV: 2,
    SipHash13: 3, externally defined: 0 */
 #undef Py_HASH_ALGORITHM
-
-/* Define if year with century should be normalized for strftime. */
-#undef Py_NORMALIZE_CENTURY
 
 /* Define if you want to enable remote debugging support. */
 #undef Py_REMOTE_DEBUG
@@ -2009,6 +2037,21 @@
 
 /* Maximum length in bytes of a thread name */
 #undef _PYTHREAD_NAME_MAXLEN
+
+/* Defined if _Complex C type can be used with libffi. */
+#undef _Py_FFI_SUPPORT_C_COMPLEX
+
+/* HACL* library can compile SIMD128 implementations */
+#undef _Py_HACL_CAN_COMPILE_VEC128
+
+/* HACL* library can compile SIMD256 implementations */
+#undef _Py_HACL_CAN_COMPILE_VEC256
+
+/* Thread stack size set by the linker (in bytes). */
+#undef _Py_LINKER_THREAD_STACK_SIZE
+
+/* Define to 1 if the machine stack grows down (default); 0 if it grows up. */
+#undef _Py_STACK_GROWS_DOWN
 
 /* Define to force use of thread-safe errno, h_errno, and other functions */
 #undef _REENTRANT

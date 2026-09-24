@@ -796,6 +796,7 @@ _PyStaticObjects_CheckRefcnt(PyInterpreterState *interp) {
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(alias));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(align));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(all));
+    _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(all_threads));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(allow_code));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(any));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(append));
@@ -893,6 +894,7 @@ _PyStaticObjects_CheckRefcnt(PyInterpreterState *interp) {
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(data));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(database));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(day));
+    _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(debug));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(decode));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(decoder));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(default));
@@ -904,7 +906,6 @@ _PyStaticObjects_CheckRefcnt(PyInterpreterState *interp) {
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(deterministic));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(device));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(dict));
-    _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(dict_content));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(dictcomp));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(difference_update));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(digest));
@@ -1139,6 +1140,7 @@ _PyStaticObjects_CheckRefcnt(PyInterpreterState *interp) {
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(offset_src));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(on_type_read));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(onceregistry));
+    _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(only_active_thread));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(only_keys));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(oparg));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(opcode));

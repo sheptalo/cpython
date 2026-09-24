@@ -1,3 +1,4 @@
+import ast
 import dis
 import gc
 from itertools import combinations, product
@@ -292,6 +293,7 @@ class TestTranforms(BytecodeTestCase):
             ('---x', 'UNARY_NEGATIVE', None, False, None, None),
             ('~~~x', 'UNARY_INVERT', None, False, None, None),
             ('+++x', 'CALL_INTRINSIC_1', intrinsic_positive, False, None, None),
+            ('~True', 'UNARY_INVERT', None, False, None, None),
         ]
 
         for (
@@ -316,7 +318,7 @@ class TestTranforms(BytecodeTestCase):
             return -(1.0-1.0)
 
         for instr in dis.get_instructions(negzero):
-            self.assertFalse(instr.opname.startswith('UNARY_'))
+            self.assertNotStartsWith(instr.opname, 'UNARY_')
         self.check_lnotab(negzero)
 
     def test_constant_folding_binop(self):
@@ -718,9 +720,9 @@ class TestTranforms(BytecodeTestCase):
         self.assertEqual(format('x = %d!', 1234), 'x = 1234!')
         self.assertEqual(format('x = %x!', 1234), 'x = 4d2!')
         self.assertEqual(format('x = %f!', 1234), 'x = 1234.000000!')
-        self.assertEqual(format('x = %s!', 1234.5678901), 'x = 1234.5678901!')
-        self.assertEqual(format('x = %f!', 1234.5678901), 'x = 1234.567890!')
-        self.assertEqual(format('x = %d!', 1234.5678901), 'x = 1234!')
+        self.assertEqual(format('x = %s!', 1234.0000625), 'x = 1234.0000625!')
+        self.assertEqual(format('x = %f!', 1234.0000625), 'x = 1234.000063!')
+        self.assertEqual(format('x = %d!', 1234.0000625), 'x = 1234!')
         self.assertEqual(format('x = %s%% %%%%', 1234), 'x = 1234% %%')
         self.assertEqual(format('x = %s!', '%% %s'), 'x = %% %s!')
         self.assertEqual(format('x = %s, y = %d', 12, 34), 'x = 12, y = 34')
@@ -1117,6 +1119,53 @@ class TestMarkingVariablesAsUnKnown(BytecodeTestCase):
 
 
 class DirectCfgOptimizerTests(CfgOptimizationTestCase):
+
+    def test_optimize_cfg_const_index_out_of_range(self):
+        insts = [
+            ('LOAD_CONST', 2, 0),
+            ('RETURN_VALUE', None, 0),
+        ]
+        seq = self.seq_from_insts(insts)
+        with self.assertRaisesRegex(ValueError, "out of range"):
+            _testinternalcapi.optimize_cfg(seq, [0, 1], 0)
+
+    def test_optimize_cfg_consts_must_be_list(self):
+        insts = [
+            ('LOAD_CONST', 0, 0),
+            ('RETURN_VALUE', None, 0),
+        ]
+        seq = self.seq_from_insts(insts)
+        with self.assertRaisesRegex(TypeError, "consts must be a list"):
+            _testinternalcapi.optimize_cfg(seq, (0,), 0)
+
+    def test_compiler_codegen_metadata_consts_roundtrips_optimize_cfg(self):
+        tree = ast.parse("x = (1, 2)", mode="exec", optimize=1)
+        insts, meta = _testinternalcapi.compiler_codegen(tree, "<s>", 0)
+        consts = meta["consts"]
+        self.assertIsInstance(consts, list)
+        _testinternalcapi.optimize_cfg(insts, consts, 0)
+
+    def test_compiler_codegen_consts_include_none_required_for_implicit_return(self):
+        # Module "pass" only needs the const table entry for None once
+        # _PyCodegen_AddReturnAtEnd runs. If metadata["consts"] were taken
+        # before that, the list would not match LOAD_CONST opargs (here: 0
+        # for None), and optimize_cfg would read out of range.
+        tree = ast.parse("pass", mode="exec", optimize=1)
+        insts, meta = _testinternalcapi.compiler_codegen(tree, "<s>", 0)
+        consts = meta["consts"]
+        self.assertEqual(consts, [None])
+
+        load_const = opcode.opmap["LOAD_CONST"]
+        self.assertEqual(
+            [t[1] for t in insts.get_instructions() if t[0] == load_const],
+            [0],
+        )
+
+        # As if consts were snapshotted before AddReturnAtEnd: still LOAD_CONST 0, no row.
+        with self.assertRaisesRegex(ValueError, "out of range"):
+            _testinternalcapi.optimize_cfg(insts, [], 0)
+
+        _testinternalcapi.optimize_cfg(insts, list(consts), 0)
 
     def cfg_optimization_test(self, insts, expected_insts,
                               consts=None, expected_consts=None,
@@ -2383,6 +2432,168 @@ class DirectCfgOptimizerTests(CfgOptimizationTestCase):
         self.assertEqual(b, [3, 2, 1, 0])
         self.assertEqual(items, [])
 
+    def test_fold_constant_big_list_for_iter(self):
+        # for x in [c1, c2, ..., cN] (N > 30) should fold to LOAD_CONST tuple
+        consts = 35
+        before = (
+            [("BUILD_LIST", 0, 1)] +
+            [("LOAD_CONST", 0, 2), ("LIST_APPEND", 1, 3)] * consts +
+            [("GET_ITER", None, 4),
+             top := self.Label(),
+             ("FOR_ITER", end := self.Label(), 5),
+             ("STORE_FAST", 0, 6),
+             ("JUMP", top, 7),
+             end,
+             ("END_FOR", None, 8),
+             ("POP_ITER", None, 9),
+             ("LOAD_CONST", 0, 10),
+             ("RETURN_VALUE", None, 11)]
+        )
+        after = [
+            ("LOAD_CONST", 1, 3),
+            ("GET_ITER", None, 4),
+            top := self.Label(),
+            ("FOR_ITER", end := self.Label(), 5),
+            ("STORE_FAST", 0, 6),
+            ("JUMP", top, 7),
+            end,
+            ("END_FOR", None, 8),
+            ("POP_ITER", None, 9),
+            ("LOAD_CONST", 0, 10),
+            ("RETURN_VALUE", None, 11),
+        ]
+        result_const = tuple(["test"] * consts)
+        self.cfg_optimization_test(before, after, consts=["test"],
+                                   expected_consts=["test", result_const])
+
+    def test_fold_constant_big_set_for_iter(self):
+        # for x in {c1, c2, ..., cN} (N > 30) should fold to LOAD_CONST frozenset
+        before = [
+            ("BUILD_SET", 0, 1),
+            ("LOAD_SMALL_INT", 1, 2), ("SET_ADD", 1, 3),
+            ("LOAD_SMALL_INT", 2, 4), ("SET_ADD", 1, 5),
+            ("LOAD_SMALL_INT", 3, 6), ("SET_ADD", 1, 7),
+            ("GET_ITER", None, 8),
+            top := self.Label(),
+            ("FOR_ITER", end := self.Label(), 9),
+            ("STORE_FAST", 0, 10),
+            ("JUMP", top, 11),
+            end,
+            ("END_FOR", None, 12),
+            ("POP_ITER", None, 13),
+            ("LOAD_CONST", 0, 14),
+            ("RETURN_VALUE", None, 15),
+        ]
+        after = [
+            ("LOAD_CONST", 1, 7),
+            ("GET_ITER", None, 8),
+            top := self.Label(),
+            ("FOR_ITER", end := self.Label(), 9),
+            ("STORE_FAST", 0, 10),
+            ("JUMP", top, 11),
+            end,
+            ("END_FOR", None, 12),
+            ("POP_ITER", None, 13),
+            ("LOAD_CONST", 0, 14),
+            ("RETURN_VALUE", None, 15),
+        ]
+        self.cfg_optimization_test(before, after, consts=["test"],
+                                   expected_consts=["test", frozenset({1, 2, 3})])
+
+    def test_fold_constant_list_to_tuple_for_iter(self):
+        INTRINSIC_LIST_TO_TUPLE = 6
+        before = [
+            ("BUILD_LIST", 0, 1),
+            ("LOAD_SMALL_INT", 1, 2), ("LIST_APPEND", 1, 3),
+            ("LOAD_SMALL_INT", 2, 4), ("LIST_APPEND", 1, 5),
+            ("LOAD_SMALL_INT", 3, 6), ("LIST_APPEND", 1, 7),
+            ("CALL_INTRINSIC_1", INTRINSIC_LIST_TO_TUPLE, 8),
+            ("GET_ITER", None, 9),
+            top := self.Label(),
+            ("FOR_ITER", end := self.Label(), 10),
+            ("STORE_FAST", 0, 11),
+            ("JUMP", top, 12),
+            end,
+            ("END_FOR", None, 13),
+            ("POP_ITER", None, 14),
+            ("LOAD_CONST", 0, 15),
+            ("RETURN_VALUE", None, 16),
+        ]
+        after = [
+            ("LOAD_CONST", 1, 8),
+            ("GET_ITER", None, 9),
+            top := self.Label(),
+            ("FOR_ITER", end := self.Label(), 10),
+            ("STORE_FAST", 0, 11),
+            ("JUMP", top, 12),
+            end,
+            ("END_FOR", None, 13),
+            ("POP_ITER", None, 14),
+            ("LOAD_CONST", 0, 15),
+            ("RETURN_VALUE", None, 16),
+        ]
+        self.cfg_optimization_test(before, after, consts=["test"],
+                                   expected_consts=["test", (1, 2, 3)])
+
+    def test_fold_constant_big_list_contains_op(self):
+        # x in [c1, c2, ..., cN] (N > 30) should fold to LOAD_CONST tuple
+        before = [
+            ("LOAD_FAST", 0, 1),
+            ("BUILD_LIST", 0, 2),
+            ("LOAD_SMALL_INT", 1, 3), ("LIST_APPEND", 1, 4),
+            ("LOAD_SMALL_INT", 2, 5), ("LIST_APPEND", 1, 6),
+            ("LOAD_SMALL_INT", 3, 7), ("LIST_APPEND", 1, 8),
+            ("CONTAINS_OP", 0, 9),
+            ("RETURN_VALUE", None, 10),
+        ]
+        after = [
+            ("LOAD_FAST_BORROW", 0, 1),
+            ("LOAD_CONST", 1, 8),
+            ("CONTAINS_OP", 0, 9),
+            ("RETURN_VALUE", None, 10),
+        ]
+        self.cfg_optimization_test(before, after, consts=[None],
+                                   expected_consts=[None, (1, 2, 3)])
+
+    def test_fold_constant_big_set_contains_op(self):
+        # x in {c1, c2, ..., cN} (N > 30) should fold to LOAD_CONST frozenset
+        before = [
+            ("LOAD_FAST", 0, 1),
+            ("BUILD_SET", 0, 2),
+            ("LOAD_SMALL_INT", 1, 3), ("SET_ADD", 1, 4),
+            ("LOAD_SMALL_INT", 2, 5), ("SET_ADD", 1, 6),
+            ("LOAD_SMALL_INT", 3, 7), ("SET_ADD", 1, 8),
+            ("CONTAINS_OP", 0, 9),
+            ("RETURN_VALUE", None, 10),
+        ]
+        after = [
+            ("LOAD_FAST_BORROW", 0, 1),
+            ("LOAD_CONST", 1, 8),
+            ("CONTAINS_OP", 0, 9),
+            ("RETURN_VALUE", None, 10),
+        ]
+        self.cfg_optimization_test(before, after, consts=[None],
+                                   expected_consts=[None, frozenset({1, 2, 3})])
+
+    def test_no_fold_big_list_for_iter_with_non_const(self):
+        same = [
+            ("BUILD_LIST", 0, 1),
+            ("LOAD_SMALL_INT", 1, 2), ("LIST_APPEND", 1, 3),
+            ("LOAD_FAST_BORROW", 0, 4), ("LIST_APPEND", 1, 5),
+            ("LOAD_SMALL_INT", 3, 6), ("LIST_APPEND", 1, 7),
+            ("GET_ITER", None, 8),
+            top := self.Label(),
+            ("FOR_ITER", end := self.Label(), 9),
+            ("STORE_FAST", 1, 10),
+            ("JUMP", top, 11),
+            end,
+            ("END_FOR", None, 12),
+            ("POP_ITER", None, 13),
+            ("LOAD_CONST", 0, 14),
+            ("RETURN_VALUE", None, 15),
+        ]
+        self.cfg_optimization_test(same, same, consts=["test"])
+
 
 class OptimizeLoadFastTestCase(DirectCfgOptimizerTests):
     def make_bb(self, insts):
@@ -2614,6 +2825,90 @@ class OptimizeLoadFastTestCase(DirectCfgOptimizerTests):
         ]
         self.cfg_optimization_test(insts, expected, consts=[None])
 
+    def test_format_simple(self):
+        # FORMAT_SIMPLE will leave its operand on the stack if it's a unicode
+        # object. We treat it conservatively and assume that it always leaves
+        # its operand on the stack.
+        insts = [
+            ("LOAD_FAST", 0, 1),
+            ("FORMAT_SIMPLE", None, 2),
+            ("STORE_FAST", 1, 3),
+        ]
+        self.check(insts, insts)
+
+        insts = [
+            ("LOAD_FAST", 0, 1),
+            ("FORMAT_SIMPLE", None, 2),
+            ("POP_TOP", None, 3),
+        ]
+        expected = [
+            ("LOAD_FAST_BORROW", 0, 1),
+            ("FORMAT_SIMPLE", None, 2),
+            ("POP_TOP", None, 3),
+        ]
+        self.check(insts, expected)
+
+    def test_set_function_attribute(self):
+        # SET_FUNCTION_ATTRIBUTE leaves the function on the stack
+        insts = [
+            ("LOAD_CONST", 0, 1),
+            ("LOAD_FAST", 0, 2),
+            ("SET_FUNCTION_ATTRIBUTE", 2, 3),
+            ("STORE_FAST", 1, 4),
+            ("LOAD_CONST", 0, 5),
+            ("RETURN_VALUE", None, 6)
+        ]
+        self.cfg_optimization_test(insts, insts, consts=[None])
+
+        insts = [
+            ("LOAD_CONST", 0, 1),
+            ("LOAD_FAST", 0, 2),
+            ("SET_FUNCTION_ATTRIBUTE", 2, 3),
+            ("RETURN_VALUE", None, 4)
+        ]
+        expected = [
+            ("LOAD_CONST", 0, 1),
+            ("LOAD_FAST_BORROW", 0, 2),
+            ("SET_FUNCTION_ATTRIBUTE", 2, 3),
+            ("RETURN_VALUE", None, 4)
+        ]
+        self.cfg_optimization_test(insts, expected, consts=[None])
+
+    def test_get_yield_from_iter(self):
+        # GET_YIELD_FROM_ITER may leave its operand on the stack
+        insts = [
+            ("LOAD_FAST", 0, 1),
+            ("GET_YIELD_FROM_ITER", None, 2),
+            ("LOAD_CONST", 0, 3),
+            send := self.Label(),
+            ("SEND", end := self.Label(), 5),
+            ("YIELD_VALUE", 1, 6),
+            ("RESUME", 2, 7),
+            ("JUMP", send, 8),
+            end,
+            ("END_SEND", None, 9),
+            ("LOAD_CONST", 0, 10),
+            ("RETURN_VALUE", None, 11),
+        ]
+        self.cfg_optimization_test(insts, insts, consts=[None])
+
+    def test_push_exc_info(self):
+        insts = [
+            ("LOAD_FAST", 0, 1),
+            ("PUSH_EXC_INFO", None, 2),
+        ]
+        self.check(insts, insts)
+
+    def test_load_special(self):
+        # LOAD_SPECIAL may leave self on the stack
+        insts = [
+            ("LOAD_FAST", 0, 1),
+            ("LOAD_SPECIAL", 0, 2),
+            ("STORE_FAST", 1, 3),
+        ]
+        self.check(insts, insts)
+
+
     def test_del_in_finally(self):
         # This loads `obj` onto the stack, executes `del obj`, then returns the
         # `obj` from the stack. See gh-133371 for more details.
@@ -2629,6 +2924,14 @@ class OptimizeLoadFastTestCase(DirectCfgOptimizerTests):
         # interpreter finalization, so run it here manually.
         gc.collect()
         self.assertEqual(obj, [42])
+
+    def test_format_simple_unicode(self):
+        # Repro from gh-134889
+        def f():
+            var = f"{1}"
+            var = f"{var}"
+            return var
+        self.assertEqual(f(), "1")
 
 
 
