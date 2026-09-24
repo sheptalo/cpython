@@ -468,6 +468,59 @@ identifier names.
 .. versionchanged:: 3.12
    ``type`` is now a soft keyword.
 
+
+.. _keyword-aliases:
+
+Russian keyword aliases
+-----------------------
+
+.. index::
+   single: keyword; alias
+   single: alias; keyword
+
+Every keyword and soft keyword (except ``_``) also has a Russian *alias*.
+An alias of a keyword is a keyword too: the parser treats it exactly like
+the keyword it stands for, so it can be used wherever that keyword can, and
+it cannot be used as an identifier.  An alias of a soft keyword is a soft
+keyword.  The English keywords keep working and both can be mixed in one
+program; code written with the aliases is parsed to the same AST (so, for
+example, :func:`ast.unparse` gives it back with the English keywords, and
+error messages mention the English keywords)::
+
+   функция факториал(n):
+       если n <= 1:
+           вернуть 1
+       вернуть n * факториал(n - 1)
+
+The aliases of the keywords are:
+
+.. sourcecode:: text
+
+   False     Ложь          elif      иначеесли     lambda    лямбда
+   None      Ничто         else      иначе         nonlocal  нелокально
+   True      Истина        except    исключение    not       не
+   and       и             finally   наконец       or        или
+   as        как           for       для           pass      пропустить
+   assert    утверждать    from      из            raise     поднять
+   async     асинхронно    global    глобально     return    вернуть
+   await     ожидать       if        если          try       попробовать
+   break     прервать      import    импорт        while     пока
+   class     класс         in        в             with      используя
+   continue  продолжить    is        есть          yield     выдать
+   def       функция
+   del       удалить
+
+and the aliases of the soft keywords are:
+
+.. sourcecode:: text
+
+   case      случай        match     сопоставить   type      тип
+
+Since the aliases of keywords are reserved words, these Russian words can no
+longer be used as identifiers.  The table of aliases is defined in
+:source:`Grammar/python.gram` and is available at runtime as
+:data:`keyword.kwaliases`.
+
 .. index::
    single: _, identifiers
    single: __, identifiers

@@ -204,17 +204,20 @@ def gen_colors_from_token_stream(
                     span = Span.from_token(token, line_lengths)
                     yield ColorSpan(span, "definition")
                 elif keyword.iskeyword(token.string):
+                    kw = keyword.kwaliases.get(token.string, token.string)
                     span_cls = "keyword"
-                    if token.string in KEYWORD_CONSTANTS:
+                    if kw in KEYWORD_CONSTANTS:
                         span_cls = "keyword_constant"
                     span = Span.from_token(token, line_lengths)
                     yield ColorSpan(span, span_cls)
-                    if token.string in IDENTIFIERS_AFTER:
+                    if kw in IDENTIFIERS_AFTER:
                         is_def_name = True
                 elif (
                     keyword.issoftkeyword(token.string)
                     and bracket_level == 0
-                    and is_soft_keyword_used(prev_token, token, next_token)
+                    and is_soft_keyword_used(
+                        *map(unalias, (prev_token, token, next_token))
+                    )
                 ):
                     span = Span.from_token(token, line_lengths)
                     yield ColorSpan(span, "soft_keyword")
@@ -224,6 +227,15 @@ def gen_colors_from_token_stream(
                 ):
                     span = Span.from_token(token, line_lengths)
                     yield ColorSpan(span, "builtin")
+
+
+def unalias(token: TI | None) -> TI | None:
+    """Return the token spelled as the keyword it is an alias of, if any."""
+    if token is not None and token.type == T.NAME:
+        kw = keyword.kwaliases.get(token.string)
+        if kw is not None:
+            return token._replace(string=kw)
+    return token
 
 
 keyword_first_sets_match = {"False", "None", "True", "await", "lambda", "not"}

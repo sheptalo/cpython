@@ -38,3 +38,11 @@ This module allows a Python program to determine if a string is a
    :mod:`__future__` statements are in effect, these will be included as well.
 
    .. versionadded:: 3.9
+
+
+.. data:: kwaliases
+
+   Dictionary mapping each :ref:`alias <keyword-aliases>` of a keyword or soft
+   keyword to that keyword, for example ``'вернуть'`` to ``'return'``.
+   The aliases of keywords are included in :data:`kwlist` as well, and the
+   aliases of soft keywords in :data:`softkwlist`.

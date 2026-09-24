@@ -26,6 +26,58 @@ _PyPegen_parse(Parser *p)
 }
 '''
 
+@keyword_aliases '''{
+    # Russian aliases of the keywords and soft keywords, as 'keyword': 'alias'
+    # (a tuple of aliases can be given as well).
+    #
+    # An alias of a keyword is a keyword too: it gets the token type of the
+    # original keyword, so it can be used wherever the original one can, and
+    # it can't be used as a name.  An alias of a soft keyword is a soft keyword
+    # accepted wherever the original one is.  The original keywords keep
+    # working, and code using the aliases is parsed to the same AST.
+    #
+    # After changing this table run 'make regen-pegen regen-keyword'.
+    'False': 'Ложь',
+    'None': 'Ничто',
+    'True': 'Истина',
+    'and': 'и',
+    'as': 'как',
+    'assert': 'утверждать',
+    'async': 'асинхронно',
+    'await': 'ожидать',
+    'break': 'прервать',
+    'class': 'класс',
+    'continue': 'продолжить',
+    'def': 'функция',
+    'del': 'удалить',
+    'elif': 'иначеесли',
+    'else': 'иначе',
+    'except': 'исключение',
+    'finally': 'наконец',
+    'for': 'для',
+    'from': 'из',
+    'global': 'глобально',
+    'if': 'если',
+    'import': 'импорт',
+    'in': 'в',
+    'is': 'есть',
+    'lambda': 'лямбда',
+    'nonlocal': 'нелокально',
+    'not': 'не',
+    'or': 'или',
+    'pass': 'пропустить',
+    'raise': 'поднять',
+    'return': 'вернуть',
+    'try': 'попробовать',
+    'while': 'пока',
+    'with': 'используя',
+    'yield': 'выдать',
+    # Soft keywords
+    'case': 'случай',
+    'match': 'сопоставить',
+    'type': 'тип',
+}'''
+
 # ========================= START OF THE GRAMMAR =========================
 
 # General grammatical elements and rules:

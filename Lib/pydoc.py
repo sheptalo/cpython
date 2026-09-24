@@ -62,6 +62,7 @@ import importlib.machinery
 import importlib.util
 import inspect
 import io
+import keyword
 import os
 import pkgutil
 import platform
@@ -2111,7 +2112,7 @@ has the same effect as typing a particular string at the help> prompt.
             elif request[:8] == 'modules ':
                 self.listmodules(request.split()[1])
             elif request in self.symbols: self.showsymbol(request)
-            elif request in ['True', 'False', 'None']:
+            elif keyword.kwaliases.get(request, request) in ['True', 'False', 'None']:
                 # special case these keywords since they are objects too
                 doc(eval(request), 'Help on %s:', output=self._output, is_cli=is_cli)
             elif request in self.keywords: self.showtopic(request)
@@ -2255,6 +2256,10 @@ Please wait a moment while I gather a list of all available modules...
 Enter any module name to get more help.  Or, type "modules spam" to search
 for modules whose name or summary contain the string "spam".
 ''')
+
+# Aliases of keywords (like 'вернуть' for 'return') refer to their keyword.
+Helper.keywords.update({alias: kw for alias, kw in keyword.kwaliases.items()
+                        if kw in Helper.keywords})
 
 help = Helper()
 
@@ -2620,7 +2625,9 @@ def _url_handler(url, content_type="text/html"):
         names = sorted(Helper.keywords.keys())
 
         def bltinlink(name):
-            return '<a href="topic?key=%s">%s</a>' % (name, name)
+            # Link aliases to the page of their keyword to keep URLs ASCII.
+            return '<a href="topic?key=%s">%s</a>' % (
+                keyword.kwaliases.get(name, name), name)
 
         contents = html.multicolumn(names, bltinlink)
         contents = heading + html.bigsection(

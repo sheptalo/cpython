@@ -2236,8 +2236,25 @@ class TestHelper(unittest.TestCase):
         return output.getvalue().strip().splitlines(keepends=False)
 
     def test_keywords(self):
+        soft_keywords = ['case', 'match']
+        soft_keywords += [alias for alias, kw in keyword.kwaliases.items()
+                          if kw in soft_keywords]
         self.assertEqual(sorted(pydoc.Helper.keywords),
-                         sorted(keyword.kwlist + ['case', 'match']))
+                         sorted(keyword.kwlist + soft_keywords))
+
+    def test_keyword_aliases(self):
+        def help_text(request):
+            output = io.StringIO()
+            pydoc.Helper(output=output).help(request)
+            return output.getvalue()
+
+        for alias, kw in keyword.kwaliases.items():
+            if kw in pydoc.Helper.keywords:
+                self.assertEqual(pydoc.Helper.keywords[alias], kw)
+        self.assertIn('The "return" statement', help_text('return'))
+        self.assertEqual(help_text('вернуть'), help_text('return'))
+        self.assertIn('class bool(int)', help_text('True'))
+        self.assertEqual(help_text('Истина'), help_text('True'))
 
     def test_interact_empty_line_continues(self):
         # gh-138568: test pressing Enter without input should continue in help session

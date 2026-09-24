@@ -119,3 +119,23 @@ class TestUtils(TestCase):
                     span_text = code[color.span.start:color.span.end + 1]
                     actual_highlights.append((span_text, color.tag))
                 self.assertEqual(actual_highlights, expected_highlights)
+
+    def test_gen_colors_keyword_aliases_highlighting(self):
+        # Aliases of keywords are highlighted like the keywords themselves.
+        cases = [
+            ("функция f", "def f"),
+            ("класс Точка", "class Point"),
+            ("x = Истина", "x = True"),
+            ("если x в y", "if x in y"),
+            ("сопоставить x:", "match x:"),
+            ("сопоставить Ничто:", "match None:"),
+            ("случай _:", "case _:"),
+            ("тип X = int", "type X = int"),
+        ]
+        for code, english in cases:
+            with self.subTest(code=code):
+                tags = [color.tag for color in gen_colors(code)]
+                self.assertEqual(tags, [color.tag for color in gen_colors(english)])
+        # Unlike 'type', 'тип' is not a builtin.
+        self.assertEqual([color.tag for color in gen_colors("тип = 1")],
+                         ["op", "number"])

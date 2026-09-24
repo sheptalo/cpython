@@ -51,6 +51,22 @@ class Test_iskeyword(unittest.TestCase):
     def test_softkeywords_are_sorted(self):
         self.assertListEqual(sorted(keyword.softkwlist), keyword.softkwlist)
 
+    def test_keyword_aliases(self):
+        for alias, key in keyword.kwaliases.items():
+            with self.subTest(alias=alias):
+                self.assertTrue(alias.isidentifier())
+                self.assertNotIn(key, keyword.kwaliases)
+                self.assertTrue(keyword.iskeyword(key) or keyword.issoftkeyword(key))
+                self.assertEqual(keyword.iskeyword(alias), keyword.iskeyword(key))
+                self.assertEqual(keyword.issoftkeyword(alias),
+                                 keyword.issoftkeyword(key))
+
+    def test_all_keywords_have_aliases(self):
+        aliased = set(keyword.kwaliases.values())
+        for key in keyword.kwlist + keyword.softkwlist:
+            if key not in keyword.kwaliases and key != '_':
+                self.assertIn(key, aliased)
+
 
 if __name__ == "__main__":
     unittest.main()
