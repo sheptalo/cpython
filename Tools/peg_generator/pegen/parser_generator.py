@@ -2,6 +2,7 @@ import ast
 import contextlib
 import re
 import sys
+import unicodedata
 from abc import abstractmethod
 from collections.abc import Iterable, Iterator, Set
 from typing import IO, Any
@@ -93,6 +94,7 @@ class ParserGenerator:
         self.tokens = tokens
         self.keywords: dict[str, int] = {}
         self.soft_keywords: set[str] = set()
+        self.keyword_aliases: dict[str, str] = {}  # alias -> keyword
         self.rules = grammar.rules
         self.validate_rule_names()
         if "trailer" not in grammar.metas and "start" not in self.rules:
@@ -150,6 +152,7 @@ class ParserGenerator:
         keyword_collector = KeywordCollectorVisitor(self, self.keywords, self.soft_keywords)
         for rule in self.all_rules.values():
             keyword_collector.visit(rule)
+        self.collect_keyword_aliases()
 
         rule_collector = RuleCollectorVisitor(self.rules, self.callmakervisitor)
         done: set[str] = set()
@@ -161,6 +164,53 @@ class ParserGenerator:
             done = set(self.all_rules)
             for rulename in todo:
                 rule_collector.visit(self.all_rules[rulename])
+
+    def collect_keyword_aliases(self) -> None:
+        """Register the aliases given by the @keyword_aliases meta.
+
+        The meta is a dict literal mapping a keyword or a soft keyword used
+        in the grammar to an alias (or to a tuple of aliases).  An alias of
+        a keyword is a keyword with the same token type, so the parser can't
+        tell it apart from the original.  An alias of a soft keyword is
+        a soft keyword accepted everywhere the original one is.
+        """
+        meta = self.grammar.metas.get("keyword_aliases")
+        if meta is None:
+            return
+        try:
+            table = ast.literal_eval(meta)
+        except (SyntaxError, ValueError) as e:
+            raise GrammarError(f"Invalid @keyword_aliases: {e}") from None
+        if not isinstance(table, dict):
+            raise GrammarError("@keyword_aliases must be a dict literal")
+        for keyword, aliases in table.items():
+            if keyword in self.keyword_aliases or (
+                keyword not in self.keywords and keyword not in self.soft_keywords
+            ):
+                raise GrammarError(
+                    f"Cannot alias {keyword!r}: it is not a keyword used in the grammar rules"
+                )
+            if not isinstance(aliases, (tuple, list)):
+                aliases = (aliases,)
+            for alias in aliases:
+                if not (
+                    isinstance(alias, str)
+                    and alias.isidentifier()
+                    and unicodedata.normalize("NFKC", alias) == alias
+                ):
+                    raise GrammarError(
+                        f"Invalid alias of {keyword!r}: {alias!r} "
+                        f"is not an NFKC-normalized identifier"
+                    )
+                if alias in self.keywords or alias in self.soft_keywords:
+                    raise GrammarError(
+                        f"Invalid alias of {keyword!r}: {alias!r} is already a keyword"
+                    )
+                if keyword in self.keywords:
+                    self.keywords[alias] = self.keywords[keyword]
+                else:
+                    self.soft_keywords.add(alias)
+                self.keyword_aliases[alias] = keyword
 
     def keyword_type(self) -> int:
         self.keyword_counter += 1

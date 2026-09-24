@@ -645,6 +645,40 @@ as well as soft keywords:
 > section for some background on this). In general, try to define them in places
 > where there are not many alternatives.
 
+Keyword aliases
+---------------
+
+The `@keyword_aliases` meta directive gives *aliases* to keywords and soft
+keywords. Its value is a dict literal that maps a keyword used in the grammar
+to an alias (or to a tuple of aliases). `Grammar/python.gram` uses it to give
+every keyword a Russian alias:
+
+```
+@keyword_aliases '''{
+    'return': 'вернуть',
+    'match': 'сопоставить',
+    ...
+}'''
+```
+
+The grammar rules only mention the original keywords:
+
+* An alias of a hard keyword is a hard keyword with the *same token type* as
+  the original one. It is added to the `reserved_keywords` table of the
+  generated parser, so the parser cannot tell `вернуть` from `return`.
+* An alias of a soft keyword is added to the `soft_keywords` array and to the
+  `soft_keyword_aliases` table, which `_PyPegen_expect_soft_keyword()` checks
+  when the token is not the soft keyword itself.
+
+Keywords are looked up by the length of the token in bytes, so the
+`reserved_keywords` table groups the keywords by their length in UTF-8, and
+non-ASCII strings are written as octal escapes to keep the generated parser
+ASCII-only.
+
+The aliases are available as `keyword.kwaliases` (and are included in
+`keyword.kwlist` or `keyword.softkwlist`). After changing them, run
+`make regen-pegen regen-keyword`.
+
 Error handling
 --------------
 

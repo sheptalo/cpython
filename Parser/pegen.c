@@ -461,6 +461,20 @@ _PyPegen_expect_forced_token(Parser *p, int type, const char* expected) {
     return t;
 }
 
+static int
+is_soft_keyword_alias(Parser *p, const char *name, const char *keyword)
+{
+    if (p->soft_keyword_aliases == NULL) {
+        return 0;
+    }
+    for (KeywordAlias *a = p->soft_keyword_aliases; a->alias != NULL; a++) {
+        if (strcmp(a->alias, name) == 0 && strcmp(a->keyword, keyword) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 expr_ty
 _PyPegen_expect_soft_keyword(Parser *p, const char *keyword)
 {
@@ -479,7 +493,7 @@ _PyPegen_expect_soft_keyword(Parser *p, const char *keyword)
         p->error_indicator = 1;
         return NULL;
     }
-    if (strcmp(s, keyword) != 0) {
+    if (strcmp(s, keyword) != 0 && !is_soft_keyword_alias(p, s, keyword)) {
         return NULL;
     }
     return _PyPegen_name_token(p);
@@ -818,6 +832,7 @@ _PyPegen_Parser_New(struct tok_state *tok, int start_rule, int flags,
     p->keywords = NULL;
     p->n_keyword_lists = -1;
     p->soft_keywords = NULL;
+    p->soft_keyword_aliases = NULL;
     p->tokens = PyMem_Malloc(sizeof(Token *));
     if (!p->tokens) {
         PyMem_Free(p);

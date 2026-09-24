@@ -50,6 +50,11 @@ typedef struct {
     int type;
 } KeywordToken;
 
+typedef struct {
+    const char *alias;
+    const char *keyword;
+} KeywordAlias;
+
 
 typedef struct {
     struct {
@@ -75,6 +80,7 @@ typedef struct {
     PyArena *arena;
     KeywordToken **keywords;
     char **soft_keywords;
+    KeywordAlias *soft_keyword_aliases;
     int n_keyword_lists;
     int start_rule;
     int *errcode;

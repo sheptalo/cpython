@@ -84,6 +84,9 @@ static char *soft_keywords[] = {
     "type",
     NULL,
 };
+static KeywordAlias soft_keyword_aliases[] = {
+    {NULL, NULL},
+};
 #define file_type 1000
 #define interactive_type 1001
 #define eval_type 1002
@@ -38056,6 +38059,7 @@ _PyPegen_parse(Parser *p)
     p->keywords = reserved_keywords;
     p->n_keyword_lists = n_keyword_lists;
     p->soft_keywords = soft_keywords;
+    p->soft_keyword_aliases = soft_keyword_aliases;
 
     // Run parser
     void *result = NULL;

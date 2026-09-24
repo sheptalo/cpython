@@ -13,7 +13,7 @@ the python source tree and run:
 Alternatively, you can run 'make regen-keyword'.
 """
 
-__all__ = ["iskeyword", "issoftkeyword", "kwlist", "softkwlist"]
+__all__ = ["iskeyword", "issoftkeyword", "kwaliases", "kwlist", "softkwlist"]
 
 kwlist = [
     'False',
@@ -59,6 +59,9 @@ softkwlist = [
     'match',
     'type'
 ]
+
+# Maps each alias of a keyword or soft keyword to that keyword.
+kwaliases = {}
 
 iskeyword = frozenset(kwlist).__contains__
 issoftkeyword = frozenset(softkwlist).__contains__

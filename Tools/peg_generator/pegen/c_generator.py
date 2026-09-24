@@ -59,10 +59,27 @@ _PyPegen_parse(Parser *p)
     p->keywords = reserved_keywords;
     p->n_keyword_lists = n_keyword_lists;
     p->soft_keywords = soft_keywords;
+    p->soft_keyword_aliases = soft_keyword_aliases;
 
     return start_rule(p);
 }
 """
+
+
+def c_string_literal(value: str) -> str:
+    """Return *value* as a C string literal consisting of ASCII characters only.
+
+    Non-ASCII characters are UTF-8 encoded and written as octal escapes, so the
+    generated code does not depend on the source character set of the compiler.
+    """
+    chars = []
+    for byte in value.encode("utf-8"):
+        char = chr(byte)
+        if char.isascii() and char.isprintable() and char not in '"\\':
+            chars.append(char)
+        else:
+            chars.append(f"\\{byte:03o}")
+    return '"' + "".join(chars) + '"'
 
 
 class NodeTypes(Enum):
@@ -493,9 +510,11 @@ class CParserGenerator(ParserGenerator, GrammarVisitor):
             self.print(trailer.rstrip("\n") % dict(mode=mode, modulename=modulename))
 
     def _group_keywords_by_length(self) -> dict[int, list[tuple[str, int]]]:
+        # The parser looks keywords up by the length of the token in bytes,
+        # which differs from len() for non-ASCII keywords (aliases).
         groups: dict[int, list[tuple[str, int]]] = {}
         for keyword_str, keyword_type in self.keywords.items():
-            length = len(keyword_str)
+            length = len(keyword_str.encode("utf-8"))
             if length in groups:
                 groups[length].append((keyword_str, keyword_type))
             else:
@@ -503,11 +522,9 @@ class CParserGenerator(ParserGenerator, GrammarVisitor):
         return groups
 
     def _setup_keywords(self) -> None:
-        n_keyword_lists = (
-            len(max(self.keywords.keys(), key=len)) + 1 if len(self.keywords) > 0 else 0
-        )
-        self.print(f"static const int n_keyword_lists = {n_keyword_lists};")
         groups = self._group_keywords_by_length()
+        n_keyword_lists = max(groups) + 1 if groups else 0
+        self.print(f"static const int n_keyword_lists = {n_keyword_lists};")
         self.print("static KeywordToken *reserved_keywords[] = {")
         with self.indent():
             num_groups = max(groups) + 1 if groups else 1
@@ -518,7 +535,12 @@ class CParserGenerator(ParserGenerator, GrammarVisitor):
                     self.print("(KeywordToken[]) {")
                     with self.indent():
                         for keyword_str, keyword_type in groups[keywords_length]:
-                            self.print(f'{{"{keyword_str}", {keyword_type}}},')
+                            comment = ""
+                            if keyword_str in self.keyword_aliases:
+                                comment = f"  // alias of '{self.keyword_aliases[keyword_str]}'"
+                            self.print(
+                                f"{{{c_string_literal(keyword_str)}, {keyword_type}}},{comment}"
+                            )
                         self.print("{NULL, -1},")
                     self.print("},")
         self.print("};")
@@ -528,8 +550,15 @@ class CParserGenerator(ParserGenerator, GrammarVisitor):
         self.print("static char *soft_keywords[] = {")
         with self.indent():
             for keyword in soft_keywords:
-                self.print(f'"{keyword}",')
+                self.print(f"{c_string_literal(keyword)},")
             self.print("NULL,")
+        self.print("};")
+        self.print("static KeywordAlias soft_keyword_aliases[] = {")
+        with self.indent():
+            for alias, keyword in sorted(self.keyword_aliases.items()):
+                if keyword in self.soft_keywords:
+                    self.print(f"{{{c_string_literal(alias)}, {c_string_literal(keyword)}}},")
+            self.print("{NULL, NULL},")
         self.print("};")
 
     def _set_up_token_start_metadata_extraction(self) -> None:

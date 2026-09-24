@@ -21,7 +21,7 @@ the python source tree and run:
 Alternatively, you can run 'make regen-keyword'.
 """
 
-__all__ = ["iskeyword", "issoftkeyword", "kwlist", "softkwlist"]
+__all__ = ["iskeyword", "issoftkeyword", "kwaliases", "kwlist", "softkwlist"]
 
 kwlist = [
 {keywords}
@@ -30,6 +30,9 @@ kwlist = [
 softkwlist = [
 {soft_keywords}
 ]
+
+# Maps each alias of a keyword or soft keyword to that keyword.
+kwaliases = {keyword_aliases}
 
 iskeyword = frozenset(kwlist).__contains__
 issoftkeyword = frozenset(softkwlist).__contains__
@@ -53,20 +56,31 @@ def main() -> None:
     args = parser.parse_args()
 
     grammar, _, _ = build_parser(args.grammar)
-    with open(args.tokens_file) as tok_file:
+    with open(args.tokens_file, encoding="utf-8") as tok_file:
         all_tokens, exact_tok, non_exact_tok = generate_token_definitions(tok_file)
     gen = CParserGenerator(grammar, all_tokens, exact_tok, non_exact_tok, file=None)
     gen.collect_rules()
 
-    with open(args.keyword_file, 'w') as thefile:
+    with open(args.keyword_file, 'w', encoding="utf-8") as thefile:
         all_keywords = sorted(list(gen.keywords.keys()))
         all_soft_keywords = sorted(gen.soft_keywords)
+        # Sorted by keyword, so that aliases of the same keyword are grouped.
+        all_keyword_aliases = sorted(gen.keyword_aliases.items(), key=lambda item: item[::-1])
 
         keywords = "" if not all_keywords else "    " + ",\n    ".join(map(repr, all_keywords))
         soft_keywords = (
             "" if not all_soft_keywords else "    " + ",\n    ".join(map(repr, all_soft_keywords))
         )
-        thefile.write(TEMPLATE.format(keywords=keywords, soft_keywords=soft_keywords))
+        keyword_aliases = (
+            "{}" if not all_keyword_aliases else "{\n" + ",\n".join(
+                f"    {alias!r}: {keyword!r}" for alias, keyword in all_keyword_aliases
+            ) + "\n}"
+        )
+        thefile.write(TEMPLATE.format(
+            keywords=keywords,
+            soft_keywords=soft_keywords,
+            keyword_aliases=keyword_aliases,
+        ))
 
 
 if __name__ == "__main__":

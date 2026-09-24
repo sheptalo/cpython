@@ -848,6 +848,49 @@ class TestPegen(unittest.TestCase):
         with self.assertRaises(SyntaxError):
             parse_string("test 1", parser_class)
 
+    def test_keyword_aliases(self) -> None:
+        grammar = """
+        @keyword_aliases "{'if': 'если', 'match': ('сопоставить', 'выбор')}"
+        start:
+            | 'if' n=NAME { ('if', n.string) }
+            | "match" n=NAME { ('match', n.string) }
+            | n=NAME { ('name', n.string) }
+        """
+        parser_class = make_parser(grammar)
+        self.assertEqual(parse_string("if x", parser_class), ('if', 'x'))
+        self.assertEqual(parse_string("если x", parser_class), ('if', 'x'))
+        self.assertEqual(parse_string("match x", parser_class), ('match', 'x'))
+        self.assertEqual(parse_string("сопоставить x", parser_class), ('match', 'x'))
+        self.assertEqual(parse_string("выбор x", parser_class), ('match', 'x'))
+        # An alias of a soft keyword can be used as a name, unlike
+        # an alias of a keyword.
+        self.assertEqual(parse_string("выбор", parser_class), ('name', 'выбор'))
+        self.assertEqual(parse_string("match выбор", parser_class), ('match', 'выбор'))
+        with self.assertRaises(SyntaxError):
+            parse_string("если", parser_class)
+        with self.assertRaises(SyntaxError):
+            parse_string("if если", parser_class)
+
+    def test_invalid_keyword_aliases(self) -> None:
+        for aliases, message in [
+            ("{'if': ", "Invalid @keyword_aliases"),
+            ("['if', 'если']", "must be a dict literal"),
+            ("{'else': 'иначе'}", "Cannot alias 'else'"),
+            ("{'if': 'если', 'если': 'коли'}", "Cannot alias 'если'"),
+            ("{'if': 'match'}", "'match' is already a keyword"),
+            ("{'if': 'если', 'match': 'если'}", "'если' is already a keyword"),
+            ("{'if': 'если если'}", "not an NFKC-normalized identifier"),
+            ("{'if': '\\ufb01'}", "not an NFKC-normalized identifier"),
+            ("{'if': 1}", "not an NFKC-normalized identifier"),
+        ]:
+            with self.subTest(aliases=aliases):
+                grammar = f"""
+                @keyword_aliases "{aliases}"
+                start: 'if' "match" NAME
+                """
+                with self.assertRaisesRegex(GrammarError, message):
+                    make_parser(grammar)
+
     def test_forced(self) -> None:
         grammar = """
         start: NAME &&':' | NAME

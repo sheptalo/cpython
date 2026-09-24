@@ -165,6 +165,9 @@ class Parser:
 
     SOFT_KEYWORDS: ClassVar[tuple[str, ...]]
 
+    # Maps an alias of a keyword or a soft keyword to the keyword itself.
+    KEYWORD_ALIASES: ClassVar[dict[str, str]] = {}
+
     def __init__(self, tokenizer: Tokenizer, *, verbose: bool = False):
         self._tokenizer = tokenizer
         self._verbose = verbose
@@ -261,6 +264,8 @@ class Parser:
     def expect(self, type: str) -> tokenize.TokenInfo | None:
         tok = self._tokenizer.peek()
         if tok.string == type:
+            return self._tokenizer.getnext()
+        if tok.type == token.NAME and self.KEYWORD_ALIASES.get(tok.string) == type:
             return self._tokenizer.getnext()
         if type in exact_token_types:
             if tok.type == exact_token_types[type]:

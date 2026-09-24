@@ -8,6 +8,7 @@ _PyPegen_parse(Parser *p)
     p->keywords = reserved_keywords;
     p->n_keyword_lists = n_keyword_lists;
     p->soft_keywords = soft_keywords;
+    p->soft_keyword_aliases = soft_keyword_aliases;
 
     // Run parser
     void *result = NULL;
